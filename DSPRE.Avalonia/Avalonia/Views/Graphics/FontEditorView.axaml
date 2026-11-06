@@ -1,0 +1,143 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="clr-namespace:DSPRE.Avalonia.Controls"
+        xmlns:vm="clr-namespace:DSPRE.Avalonia.ViewModels.Graphics"
+        xmlns:views="clr-namespace:DSPRE.Avalonia.Views.Controls"
+        x:Class="DSPRE.Avalonia.Views.Graphics.FontEditorView"
+        x:DataType="vm:FontEditorViewModel"
+        Title="Font editor"
+        Width="1000" Height="700" MinWidth="1000" MinHeight="560"
+        WindowStartupLocation="CenterScreen">
+
+  <Design.DataContext>
+    <vm:FontEditorViewModel/>
+  </Design.DataContext>
+
+  <Window.Styles>
+    <Style Selector="TextBlock.hint">
+      <Setter Property="FontSize" Value="12"/>
+      <Setter Property="Foreground" Value="{DynamicResource Editor.Subtle}"/>
+      <Setter Property="TextWrapping" Value="Wrap"/>
+    </Style>
+  </Window.Styles>
+
+  <DockPanel>
+
+    <Border DockPanel.Dock="Bottom" Background="{DynamicResource Editor.StatusBg}"
+            BorderBrush="{DynamicResource Editor.Border}" BorderThickness="0,1,0,0" Padding="8,3">
+      <TextBlock Text="{Binding StatusText}" Classes="hint" VerticalAlignment="Center"/>
+    </Border>
+
+    <controls:EditorToolbar>
+        <TextBlock Text="Font" VerticalAlignment="Center"/>
+        <ComboBox Width="220" ItemsSource="{Binding FontNames}" SelectedIndex="{Binding SelectedFontIndex}"
+                  PlaceholderText="No readable fonts"/>
+        <Button Content="Add font" controls:Icon.Key="addIcon" Click="AddFont_Click" IsEnabled="{Binding CanAddFont}"
+                IsVisible="{Binding !OffersFontPatch}" ToolTip.Tip="Adds a copy of this font"/>
+        <Button Content="Open in ROM patch toolbox" controls:Icon.Key="OpenLink" Click="FontPatch_Click"
+                IsVisible="{Binding OffersFontPatch}" ToolTip.Tip="Lets you add fonts"/>
+        <Button Content="Undo" controls:Icon.Key="undo" Click="Undo_Click" IsEnabled="{Binding CanUndo}" ToolTip.Tip="Undo (Ctrl+Z)"/>
+        <Button Content="Redo" controls:Icon.Key="redo" Click="Redo_Click" IsEnabled="{Binding CanRedo}" ToolTip.Tip="Redo (Ctrl+Y)"/>
+        <Button Content="Export PNG…" controls:Icon.Key="export" Click="ExportPng_Click" IsEnabled="{Binding CanUsePictureCommand}"
+                ToolTip.Tip="Write this letter, or the whole font, out as a PNG"/>
+        <Button Content="Import PNG…" controls:Icon.Key="import" Click="ImportPng_Click" IsEnabled="{Binding CanUsePictureCommand}"
+                ToolTip.Tip="Read a PNG over this letter, or over the whole font"/>
+        <CheckBox Content="Whole font" IsChecked="{Binding WholeFontForPictures}" VerticalAlignment="Center"
+                  ToolTip.Tip="Every letter as one sheet"/>
+        <Button Content="Save this font" controls:Icon.Key="saveButton" Click="Save_Click" IsEnabled="{Binding HasUnsavedChanges}"/>
+        <Button Content="Discard" controls:Icon.Key="resetIcon" Click="Discard_Click" IsEnabled="{Binding HasUnsavedChanges}"/>
+        <TextBlock Classes="hint" VerticalAlignment="Center"
+                   Text="Nothing is written until you save."/>
+    </controls:EditorToolbar>
+
+    <!-- Every letter in the font -->
+    <Border DockPanel.Dock="Left" Width="230" BorderBrush="{DynamicResource Editor.Border}"
+            BorderThickness="0,0,1,0">
+      <DockPanel Margin="6">
+        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,6">
+          <TextBlock Text="Letters" FontWeight="SemiBold"/>
+          <controls:HelpTip Text="Each picture's number in the font, beside the character it writes."/>
+        </StackPanel>
+
+        <TextBox DockPanel.Dock="Top" Text="{Binding Search}" Margin="0,0,0,4"
+                 PlaceholderText="Search letters or numbers"/>
+        <ComboBox DockPanel.Dock="Top" SelectedIndex="{Binding ShowWhat}" Margin="0,0,0,4"
+                  HorizontalAlignment="Stretch">
+          <ComboBoxItem>All letters</ComboBoxItem>
+          <ComboBoxItem>Drawn</ComboBoxItem>
+          <ComboBoxItem>Empty slots</ComboBoxItem>
+          <ComboBoxItem>Has a character</ComboBoxItem>
+          <ComboBoxItem>No character yet</ComboBoxItem>
+        </ComboBox>
+        <TextBlock DockPanel.Dock="Top" Text="{Binding FilterSummary}" Classes="hint" Margin="0,0,0,6"/>
+
+        <ListBox ItemsSource="{Binding Glyphs}" SelectedIndex="{Binding SelectedRowIndex}">
+          <ListBox.ItemTemplate>
+            <DataTemplate>
+              <StackPanel Orientation="Horizontal" Spacing="10">
+                <TextBlock Text="{Binding Number}" Width="42"
+                           Foreground="{DynamicResource Editor.Subtle}"
+                           FontFamily="Consolas,monospace"/>
+                <TextBlock Text="{Binding Letter}" IsVisible="{Binding IsMapped}"/>
+                <TextBlock Text="{Binding Describe}" IsVisible="{Binding !IsMapped}"
+                           FontSize="11" FontStyle="Italic"
+                           Foreground="{DynamicResource Editor.Subtle}"/>
+              </StackPanel>
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
+      </DockPanel>
+    </Border>
+
+    <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+      <StackPanel Margin="14" Spacing="12">
+
+        <TextBlock Text="{Binding GlyphTitle}" FontWeight="SemiBold"/>
+
+        <StackPanel Orientation="Horizontal" Spacing="16">
+          <Border BorderBrush="{DynamicResource Editor.Border}" BorderThickness="1">
+            <views:GlyphPainter Model="{Binding}" Revision="{Binding GlyphChanged}"
+                                LetterWidth="{Binding GlyphWidth}"
+                                Shade="{Binding #ShadePicker.SelectedIndex}"/>
+          </Border>
+
+          <StackPanel Spacing="8" Width="230">
+            <StackPanel Orientation="Horizontal">
+              <TextBlock Text="Shade" FontWeight="SemiBold"/>
+              <controls:HelpTip Text="Left button paints the picked shade, right button rubs out."/>
+            </StackPanel>
+            <ComboBox x:Name="ShadePicker" SelectedIndex="1" Width="200">
+              <ComboBoxItem>Nothing</ComboBoxItem>
+              <ComboBoxItem>Ink</ComboBoxItem>
+              <ComboBoxItem>Second ink</ComboBoxItem>
+              <ComboBoxItem>Paper</ComboBoxItem>
+            </ComboBox>
+
+            <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+              <TextBlock Text="Width" FontWeight="SemiBold"/>
+              <controls:HelpTip Text="Where the next letter starts, shown by the red line."/>
+            </StackPanel>
+            <NumericUpDown Value="{Binding GlyphWidth}" Minimum="0" Maximum="16" FormatString="0"
+                           IsEnabled="{Binding HasGlyph}" Width="120" HorizontalAlignment="Left"/>
+            <TextBlock Classes="hint" Text="Pick a letter on the left first." IsVisible="{Binding !HasGlyph}"/>
+          </StackPanel>
+        </StackPanel>
+
+        <Separator/>
+
+        <TextBlock Text="How a sentence comes out" FontWeight="SemiBold"/>
+        <TextBox Text="{Binding Sample}" AcceptsReturn="False"/>
+        <TextBlock Text="{Binding PreviewNote}" Classes="hint"
+                   IsVisible="{Binding PreviewNote, Converter={x:Static ObjectConverters.IsNotNull}}"/>
+        <Border BorderBrush="{DynamicResource Editor.Border}" BorderThickness="1"
+                Background="White" Padding="10" HorizontalAlignment="Left">
+          <views:FontSampleLine Model="{Binding}" Revision="{Binding GlyphChanged}"
+                                Text="{Binding Sample}"/>
+        </Border>
+        <controls:HelpTip HorizontalAlignment="Left" Text="Shown at game size and at 3×"/>
+
+      </StackPanel>
+    </ScrollViewer>
+
+  </DockPanel>
+</Window>

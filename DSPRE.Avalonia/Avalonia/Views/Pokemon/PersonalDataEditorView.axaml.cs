@@ -1,0 +1,90 @@
+using Avalonia.Controls;
+using Avalonia.Interactivity;
+using Avalonia.Platform.Storage;
+using DSPRE.Avalonia.ViewModels;
+using System.Collections.Generic;
+
+namespace DSPRE.Avalonia.Views.Pokemon
+{
+    public partial class PersonalDataEditorView : UserControl
+    {
+        private PersonalDataEditorViewModel ViewModel => (PersonalDataEditorViewModel)DataContext;
+
+        public PersonalDataEditorView()
+        {
+            InitializeComponent();
+        }
+
+        public PersonalDataEditorView(PersonalDataEditorViewModel vm)
+        {
+            InitializeComponent();
+            DataContext = vm;
+        }
+
+        private async void Export_Click(object sender, RoutedEventArgs e)
+        {
+            Window window = TopLevel.GetTopLevel(this) as Window;
+            await ViewModel.ExportCommandAsync(window);
+        }
+
+        private async void Import_Click(object sender, RoutedEventArgs e)
+        {
+            Window window = TopLevel.GetTopLevel(this) as Window;
+            await ViewModel.ImportCommandAsync(window);
+        }
+
+        private void AddMachine_Click(object sender, RoutedEventArgs e)
+            => ViewModel.AddMachineCommand();
+
+        private void WildHeldItems_Click(object sender, RoutedEventArgs e)
+            => AvaloniaEditorLauncher.OpenWildHeldItems();
+
+        private void RemoveMachine_Click(object sender, RoutedEventArgs e)
+            => ViewModel.RemoveMachineCommand();
+
+        private void AddAll_Click(object sender, RoutedEventArgs e)
+            => ViewModel.AddAllMachinesCommand();
+
+        private void RemoveAll_Click(object sender, RoutedEventArgs e)
+            => ViewModel.RemoveAllMachinesCommand();
+
+        private void TmHmBulkEditor_Click(object sender, RoutedEventArgs e)
+            => AvaloniaEditorLauncher.OpenTmHmBulkEditor();
+
+        private void CreateOwEntry_Click(object sender, RoutedEventArgs e)
+            => ViewModel.CreateOwFollowerEntry();
+
+        private void ToggleOwAnimate_Click(object sender, RoutedEventArgs e)
+            => ViewModel.OwAnimating = !ViewModel.OwAnimating;
+
+        private async void ImportOwSprite_Click(object sender, RoutedEventArgs e)
+        {
+            TopLevel top = TopLevel.GetTopLevel(this);
+            if (top == null || ViewModel == null) return;
+
+            IReadOnlyList<IStorageFile> files = await top.StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+            {
+                Title = "Import overworld follower sprite sheet PNG",
+                AllowMultiple = false,
+                FileTypeFilter = new List<FilePickerFileType> { DialogHelper.PngFilter }
+            });
+            if (files.Count == 0) return;
+            string path = files[0].TryGetLocalPath();
+            if (path == null) return;
+
+            string shiny = null;
+            if (await DialogHelper.AskYesNoAsync("Also import a shiny version? It has to be the same drawing, only recoloured.", "Shiny colours", TopLevel.GetTopLevel(this) as Window))
+            {
+                IReadOnlyList<IStorageFile> shinyFiles = await top.StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+                {
+                    Title = "Shiny follower sheet",
+                    AllowMultiple = false,
+                    FileTypeFilter = new List<FilePickerFileType> { DialogHelper.PngFilter }
+                });
+                if (shinyFiles.Count > 0) shiny = shinyFiles[0].TryGetLocalPath();
+            }
+
+            ViewModel.ImportOwFollowerSprite(path, shiny);
+        }
+    }
+}

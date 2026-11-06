@@ -2,7 +2,6 @@ name: Feature Request
 description: Suggest a new feature or improvement for the DS Pokémon ROM Editor
 title: "[Feature] "
 labels: ["enhancement"]
-type: "Feature"
 body:
   - type: markdown
     attributes:

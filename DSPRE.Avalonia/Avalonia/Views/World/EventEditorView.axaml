@@ -1,0 +1,499 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:DSPRE.Avalonia.ViewModels.World"
+        xmlns:gl="clr-namespace:DSPRE.Avalonia.Gl"
+        xmlns:controls="clr-namespace:DSPRE.Avalonia.Controls"
+        x:Class="DSPRE.Avalonia.Views.World.EventEditorView"
+        x:DataType="vm:EventEditorViewModel">
+
+  <Design.DataContext>
+    <vm:EventEditorViewModel/>
+  </Design.DataContext>
+
+  <DockPanel>
+    <controls:EditorToolbar>
+        <controls:FusionAutoCompleteBox x:Name="FilePicker" Width="150" ItemsSource="{Binding EventNames}" SelectedIndex="{Binding SelectedEventIndex}"/>
+        <controls:HeadersButton controls:EditorToolbar.Slot="Picker" Source="Event" FileId="{Binding SelectedEventIndex}"/>
+        <Button Content="Add" controls:Icon.Key="addIcon"     Click="AddFile_Click"/>
+        <Button Content="Remove last" controls:Icon.Key="deleteIcon" Click="RemFile_Click"/>
+        <Button x:Name="SaveButton" Content="Save" controls:Icon.Key="saveButton"   Click="Save_Click" IsEnabled="{Binding HasUnsavedChanges}"/>
+        <Button Content="Discard" controls:Icon.Key="resetIcon" Click="Discard_Click" IsEnabled="{Binding HasUnsavedChanges}"/>
+        <controls:UndoRedoButtons/>
+        <Button Content="Import…" controls:Icon.Key="import" Click="Import_Click"/>
+        <Button Content="Export…" controls:Icon.Key="export" Click="Export_Click"/>
+        <Border x:Name="Pegman" Background="Transparent" Cursor="Hand" Padding="2" IsVisible="{Binding ShowBetaFeatures}"
+                PointerPressed="Pegman_PointerPressed"
+                PointerMoved="Pegman_PointerMoved"
+                PointerReleased="Pegman_PointerReleased"
+                ToolTip.Tip="Drag onto the map to set where the walk starts.">
+          <StackPanel Orientation="Horizontal" Spacing="5">
+            <Image x:Name="PegmanIcon" Width="26" Height="26"
+                   RenderOptions.BitmapInterpolationMode="None"/>
+            <TextBlock Text="Drag to walk" VerticalAlignment="Center"/>
+          </StackPanel>
+        </Border>
+        <Button Content="Step in here" controls:Icon.Key="play" Click="StepInHere_Click" IsVisible="{Binding ShowBetaFeatures}"
+                ToolTip.Tip="Walk the map from beside the selected event."/>
+        <Button Content="Animate" controls:Icon.Key="play" Click="AnimatedPreview_Click" IsVisible="{Binding ShowBetaFeatures}"
+                ToolTip.Tip="Plays the map on its own: water, buildings and people moving. Scripts don't run."/>
+        <Button Content="Screenshot" controls:Icon.Key="cameraIcon" Click="Screenshot_Click"
+                ToolTip.Tip="Saves what the map view is currently showing as a PNG."/>
+        <Button Content="Report…" controls:Icon.Key="bug" Click="ExportDebug_Click"
+                ToolTip.Tip="Save the layout and a picture for a bug report."/>
+    </controls:EditorToolbar>
+
+    <Border DockPanel.Dock="Bottom" Background="{DynamicResource Editor.StatusBg}" BorderBrush="{DynamicResource Editor.Border}" BorderThickness="0,1,0,0" Padding="8,3">
+      <Grid ColumnDefinitions="*,Auto">
+        <TextBlock Grid.Column="0" Text="{Binding StatusText}" FontSize="12" Foreground="{DynamicResource Editor.Subtle}" VerticalAlignment="Center"/>
+        <TextBlock Grid.Column="1" Text="{Binding HoverCoordsText}" FontSize="12" FontFamily="Consolas,Menlo,monospace"
+                   Foreground="{DynamicResource Editor.Subtle}" VerticalAlignment="Center" Margin="12,0,0,0"
+                   ToolTip.Tip="The tile under the pointer."/>
+      </Grid>
+    </Border>
+
+    <Grid x:Name="SplitGrid">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="*" MinWidth="300"/>
+        <ColumnDefinition Width="Auto"/>
+        <ColumnDefinition Width="520" MinWidth="460"/>
+      </Grid.ColumnDefinitions>
+
+      <!-- 3D map with event markers -->
+      <DockPanel Grid.Column="0" Margin="4">
+        <Border DockPanel.Dock="Top" Background="{DynamicResource Editor.PanelBg}" BorderBrush="{DynamicResource Editor.Border}" BorderThickness="1" Padding="6,4" Margin="0,0,0,4">
+          <StackPanel Spacing="3">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <TextBlock Text="{Binding MapInfo}" VerticalAlignment="Center" FontSize="12" Foreground="{DynamicResource Editor.Subtle}"/>
+              <TextBlock Text="left-drag pan · right-drag orbit · wheel zoom" VerticalAlignment="Center" FontSize="12" Foreground="{DynamicResource Editor.Subtle}"/>
+            </StackPanel>
+            <WrapPanel Classes="toolbar" IsVisible="{Binding NeedsViewChoice}">
+              <TextBlock Text="Matrix" VerticalAlignment="Center" FontSize="12"/>
+              <controls:FusionAutoCompleteBox Width="220" ItemsSource="{Binding ViewMatrixNames}" SelectedIndex="{Binding ViewMatrixIndex}"/>
+              <TextBlock Text="Area data" VerticalAlignment="Center" FontSize="12"/>
+              <NumericUpDown Width="110" Minimum="0" Maximum="{Binding MaxViewArea}" Increment="1" FormatString="0" Value="{Binding ViewArea}"/>
+            </WrapPanel>
+            <WrapPanel x:Name="ShowBar" Classes="toolbar">
+              <TextBlock Text="Show" VerticalAlignment="Center" FontSize="12" Foreground="{DynamicResource Editor.Subtle}"/>
+              <CheckBox Content="Overworlds" IsChecked="{Binding ShowOverworlds}" FontSize="12"/>
+              <CheckBox Content="Warps"      IsChecked="{Binding ShowWarps}" FontSize="12"/>
+              <CheckBox Content="Triggers"   IsChecked="{Binding ShowTriggers}" FontSize="12"/>
+              <CheckBox Content="Spawnables" IsChecked="{Binding ShowSpawnables}" FontSize="12"/>
+              <CheckBox Content="Tile grid"  IsChecked="{Binding ShowTileGrid}" FontSize="12"/>
+              <CheckBox Content="Map edges"  IsChecked="{Binding ShowGrid}" IsEnabled="{Binding GridToggleEnabled}" FontSize="12"
+                        ToolTip.Tip="Only on 4 maps or fewer"/>
+              <CheckBox Content="Gizmos" IsChecked="False" FontSize="12" IsVisible="{Binding ShowBetaFeatures}"
+                        IsCheckedChanged="Gizmos_Toggled"
+                        ToolTip.Tip="Cyan marks the 32×32 tile cell, yellow the map model's real extent."/>
+              <CheckBox Content="Grid layout" IsChecked="{Binding StitchGrid}" FontSize="12"
+                        ToolTip.Tip="Stitch on a fixed 32-tile grid like the DS. Off lays maps out by their geometry."/>
+              <Rectangle Width="1" Fill="{DynamicResource Editor.Separator}" Margin="3,1"/>
+              <ToggleButton Content="Move" controls:Icon.Key="move" IsChecked="{Binding EditMode3D}" FontSize="12" Padding="6,2"
+                            ToolTip.Tip="Click an event, then drag its handles or use the arrow keys."/>
+              <Rectangle Width="1" Fill="{DynamicResource Editor.Separator}" Margin="3,1"/>
+              <TextBlock Text="View" VerticalAlignment="Center" FontSize="12" Foreground="{DynamicResource Editor.Subtle}"/>
+              <ToggleButton x:Name="Mode2DToggle" Content="2D" IsChecked="{Binding Flat2D}" FontSize="12" Padding="6,2"
+                            ToolTip.Tip="Flat top-down view, showing every map in the header at once."/>
+              <Button Content="Top" Click="CamTop_Click" FontSize="12" Padding="6,2" ToolTip.Tip="Top-down camera"
+                      IsEnabled="{Binding !Flat2D}"/>
+              <Button Content="Iso" Click="CamIso_Click" FontSize="12" Padding="6,2" ToolTip.Tip="Isometric camera"
+                      IsEnabled="{Binding !Flat2D}"/>
+              <Button controls:Icon.Key="resetIcon" Click="CamReset_Click" FontSize="12" Padding="6,2" ToolTip.Tip="Reset camera"/>
+              <Button Content="Centre" controls:Icon.Key="target" Click="CenterOnEvent_Click" FontSize="12" Padding="6,2"
+                      ToolTip.Tip="Moves the camera onto the selected event."/>
+            </WrapPanel>
+          </StackPanel>
+        </Border>
+        <Panel>
+          <Border x:Name="GlHost" Background="#1F1F23" BorderBrush="#444" BorderThickness="1">
+            <gl:NsbmdGlControl x:Name="GlView"/>
+          </Border>
+          <Border IsVisible="{Binding IsCatchAllHeader}" Background="#1F1F23"
+                  HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
+            <TextBlock Text="{Binding CatchAllNote}" TextWrapping="Wrap" MaxWidth="420"
+                       HorizontalAlignment="Center" VerticalAlignment="Center"
+                       TextAlignment="Center" FontSize="13"
+                       Foreground="{DynamicResource Editor.Subtle}"/>
+          </Border>
+          <Canvas x:Name="DragOverlay" IsHitTestVisible="False">
+            <Image x:Name="DragGhost" Width="44" Height="44" IsVisible="False"
+                   RenderOptions.BitmapInterpolationMode="None"/>
+            <Border x:Name="DropLabel" IsVisible="False" Background="#CC000000" Padding="5,2"
+                    CornerRadius="3">
+              <TextBlock x:Name="DropText" FontSize="12" Foreground="#FFF"/>
+            </Border>
+          </Canvas>
+        </Panel>
+      </DockPanel>
+
+      <!-- Editing panels -->
+      <GridSplitter Grid.Column="1" Width="5" ResizeDirection="Columns" Background="Transparent"/>
+      <TabControl x:Name="EventTabs" Grid.Column="2" Margin="0,4,4,4" SelectedIndex="{Binding SelectedTabIndex}">
+
+        <TabItem Header="Overworlds">
+          <DockPanel Margin="4">
+            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="6" Margin="0,0,0,4">
+              <controls:IconImage Key="overworld" VerticalAlignment="Center"/>
+              <Button Content="Add" controls:Icon.Key="addIcon" Click="AddOw_Click"/>
+              <Button Content="Remove" controls:Icon.Key="deleteIcon" Click="RemoveOw_Click" IsEnabled="{Binding HasOw}"
+                      ToolTip.Tip="Remove the selected overworld (Del while the list is focused)"/>
+              <Button Content="Duplicate" controls:Icon.Key="copy" Click="DupOw_Click" IsEnabled="{Binding HasOw}"/>
+              <Rectangle Width="1" Fill="{DynamicResource Editor.Separator}" Margin="3,1"/>
+              <Button controls:Icon.Key="sortAscending" Click="SortAsc_Click" ToolTip.Tip="Sort by overworld ID, low to high"/>
+              <Button controls:Icon.Key="sortDescending" Click="SortDesc_Click" ToolTip.Tip="Sort by overworld ID, high to low"/>
+            </StackPanel>
+            <Grid ColumnDefinitions="180,*">
+              <ListBox Grid.Column="0" ItemsSource="{Binding Overworlds}"
+                       SelectedIndex="{Binding SelectedOverworldIndex}"
+                       Tag="ow" KeyDown="EventList_KeyDown"/>
+              <ScrollViewer Grid.Column="1" Margin="6,0,0,0" Padding="0,0,14,0">
+                <StackPanel Spacing="3" IsVisible="{Binding HasOw}">
+                  <TextBlock Text="Position" FontWeight="Bold"/>
+                  <Grid ColumnDefinitions="72,*,72,*" RowDefinitions="Auto,Auto,Auto" Margin="0,2,0,0">
+                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Map X" VerticalAlignment="Center"/>
+                    <NumericUpDown Grid.Row="0" Grid.Column="1" Margin="0,0,6,3" Minimum="-32768" Maximum="32767" Increment="1" FormatString="0" Value="{Binding XMap}"/>
+                    <TextBlock Grid.Row="0" Grid.Column="2" Text="Map Y" VerticalAlignment="Center"/>
+                    <NumericUpDown Grid.Row="0" Grid.Column="3" Minimum="-32768" Maximum="32767" Increment="1" FormatString="0" Value="{Binding YMap}"/>
+                    <TextBlock Grid.Row="1" Grid.Column="0" Text="Z" VerticalAlignment="Top" Margin="0,5,0,0"/>
+                    <StackPanel Grid.Row="1" Grid.Column="1" Margin="0,0,6,3">
+                      <NumericUpDown Minimum="-32768" Maximum="32767" Increment="1" FormatString="0" Value="{Binding ZPos}"/>
+                      <TextBlock Text="{Binding ZPosNote}" FontSize="11" Margin="2,1,0,0"
+                                 TextWrapping="Wrap"
+                                 ToolTip.Tip="{Binding ZPosNoteTip}"
+                                 Foreground="{DynamicResource Editor.Subtle}"/>
+                    </StackPanel>
+                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Matrix X" VerticalAlignment="Center"/>
+                    <NumericUpDown Grid.Row="2" Grid.Column="1" Margin="0,0,6,0" Minimum="0" Maximum="65535" Increment="1" FormatString="0" Value="{Binding XMatrix}"/>
+                    <TextBlock Grid.Row="2" Grid.Column="2" Text="Matrix Y" VerticalAlignment="Center"/>
+                    <NumericUpDown Grid.Row="2" Grid.Column="3" Minimum="0" Maximum="65535" Increment="1" FormatString="0" Value="{Binding YMatrix}"/>
+                  </Grid>
+                  <TextBlock Text="Object ID" FontWeight="Bold" Margin="0,4,0,0"
+                             ToolTip.Tip="The number scripts use to move, show or hide this overworld."/>
+                  <NumericUpDown Minimum="0" Maximum="65535" Value="{Binding OwId}"/>
+
+                  <TextBlock Text="Sprite" FontWeight="Bold" Margin="0,4,0,0"/>
+                  <Grid ColumnDefinitions="*,Auto">
+                    <ComboBox Grid.Column="0" ItemsSource="{Binding OwSpriteEntries}" SelectedIndex="{Binding OwSpriteIndex}" HorizontalAlignment="Stretch"/>
+                    <Border Grid.Column="1" Width="40" Height="40" Margin="6,0,0,0" Background="{DynamicResource Editor.PanelBg}"
+                            BorderBrush="{DynamicResource Editor.Border}" BorderThickness="1" ToolTip.Tip="{Binding DynamicSpriteTip}">
+                      <Panel>
+                        <Image Source="{Binding OwSpritePreview}" IsVisible="{Binding HasOwSpritePreview}" Stretch="Uniform" Margin="2"/>
+                        <gl:NsbmdGlControl x:Name="OwModelView" IsVisible="{Binding HasOwModelPreview}" IsHitTestVisible="False"/>
+                        <Rectangle IsVisible="{Binding IsDynamicSprite}" Stroke="#FFC71A" StrokeThickness="2" StrokeDashArray="2,2"/>
+                      </Panel>
+                    </Border>
+                  </Grid>
+
+                  <TextBlock Text="Movement" FontWeight="Bold" Margin="0,4,0,0"/>
+                  <ComboBox ItemsSource="{Binding OwMovementNames}" SelectedIndex="{Binding OwMovementIndex}" HorizontalAlignment="Stretch"/>
+                  <TextBlock Text="{Binding OwMovementUnknownNote}" FontSize="10" Foreground="{DynamicResource Editor.Warn}"
+                             TextWrapping="Wrap" IsVisible="{Binding OwMovementUnknown}"/>
+                  <Grid ColumnDefinitions="72,*,72,*" Margin="0,2,0,0"
+                        ToolTip.Tip="Tiles each way, -1 for none">
+                    <TextBlock Grid.Column="0" Text="X range" VerticalAlignment="Center"/>
+                    <NumericUpDown Grid.Column="1" Margin="0,0,6,0" Minimum="-1" Maximum="32767" Value="{Binding OwXRange}"/>
+                    <TextBlock Grid.Column="2" Text="Y range" VerticalAlignment="Center"/>
+                    <NumericUpDown Grid.Column="3" Minimum="-1" Maximum="32767" Value="{Binding OwYRange}"/>
+                  </Grid>
+
+                  <TextBlock Text="Orientation" FontWeight="Bold" Margin="0,4,0,0"/>
+                  <ComboBox ItemsSource="{Binding OwOrientationNames}" SelectedIndex="{Binding OwOrientationIndex}" HorizontalAlignment="Stretch"/>
+
+                  <TextBlock Text="Type" FontWeight="Bold" Margin="0,4,0,0"/>
+                  <ComboBox ItemsSource="{Binding OwEventTypes}" SelectedIndex="{Binding OwEventTypeIndex}"
+                            HorizontalAlignment="Stretch"
+                            ToolTip.Tip="Every type this game defines"/>
+                  <TextBlock Text="{Binding OwTypeNote}" FontSize="10" Foreground="{DynamicResource Editor.Subtle}"
+                             TextWrapping="Wrap" IsVisible="{Binding OwHasTypeNote}"/>
+                  <TextBlock Text="{Binding OwTypeUnknownNote}" FontSize="10" Foreground="{DynamicResource Editor.Warn}"
+                             TextWrapping="Wrap" IsVisible="{Binding OwTypeUnknown}"/>
+
+                  <StackPanel Spacing="3" IsVisible="{Binding OwItemFieldsVisibleVanilla}" Margin="0,4,0,0">
+                    <TextBlock Text="Item" FontWeight="Bold"/>
+                    <Grid ColumnDefinitions="*,Auto">
+                      <controls:FusionAutoCompleteBox Grid.Column="0" ItemsSource="{Binding OwItemEntries}" SelectedIndex="{Binding OwItemIndex}" HorizontalAlignment="Stretch"/>
+                      <Button Grid.Column="1" Content="Edit item list…" controls:Icon.Key="pencil" Click="ManageGroundItems_Click" Margin="4,0,0,0" ToolTip.Tip="Add or remove the item and quantity pairs item events can give"/>
+                    </Grid>
+                    <!-- No warning here: the dropdown itself shows whether the item resolved, and the
+                         raw Script field appears below when it didn't. -->
+                  </StackPanel>
+
+                  <StackPanel Spacing="3" IsVisible="{Binding OwItemFieldsVisibleHGE}" Margin="0,4,0,0">
+                    <TextBlock Text="Item ID" FontWeight="Bold"
+                               ToolTip.Tip="hg-engine reads the item from this event's data, with the script locked to 7000."/>
+                    <NumericUpDown Minimum="0" Maximum="65535" Value="{Binding OwItemIdHGE}"/>
+                  </StackPanel>
+
+                  <StackPanel Spacing="3" IsVisible="{Binding OwTrainerFieldsVisible}" Margin="0,4,0,0">
+                    <TextBlock Text="Trainer" FontWeight="Bold"/>
+                    <controls:FusionAutoCompleteBox controls:EditorLink.To="Trainer" ItemsSource="{Binding OwTrainerEntries}" SelectedIndex="{Binding OwTrainerIndex}" HorizontalAlignment="Stretch"/>
+                    <TextBlock Text="No trainer has this script number."
+                               FontSize="10" Foreground="{DynamicResource Editor.Warn}" TextWrapping="Wrap" IsVisible="{Binding OwTrainerIndexOutOfRange}"/>
+                    <TextBlock Text="Trainer 0 is empty. Pick another."
+                               FontSize="10" Foreground="{DynamicResource Editor.Warn}" TextWrapping="Wrap" IsVisible="{Binding OwTrainerIsDummy}"/>
+                    <CheckBox Content="Partner (double battle)" IsChecked="{Binding OwPartnerTrainer}"/>
+                    <TextBlock Text="Sight range" FontWeight="Bold" Margin="0,4,0,0"
+                               ToolTip.Tip="How many tiles ahead the trainer sees."/>
+                    <NumericUpDown Minimum="0" Maximum="65535" Value="{Binding OwSight}"/>
+                  </StackPanel>
+
+                  <StackPanel Spacing="3" IsVisible="{Binding OwIsApricornTree}" Margin="0,4,0,0">
+                    <TextBlock Text="Apricorn bed" FontWeight="Bold"
+                               ToolTip.Tip="Which apricorn bed this tree belongs to."/>
+                    <NumericUpDown Minimum="0" Maximum="65535" Value="{Binding OwSight}"/>
+                    <TextBlock Text="{Binding OwApricornNote}" FontSize="10" TextWrapping="Wrap"
+                               Foreground="{DynamicResource Editor.Subtle}"/>
+                  </StackPanel>
+
+                  <StackPanel Spacing="3" IsVisible="{Binding OwParam0Visible}" Margin="0,4,0,0">
+                    <TextBlock Text="{Binding OwParam0Label}" FontWeight="Bold"
+                               ToolTip.Tip="Tiles ahead. Stored in the first general parameter."/>
+                    <NumericUpDown Minimum="0" Maximum="65535" Value="{Binding OwSight}"/>
+                  </StackPanel>
+
+                  <StackPanel Spacing="3" IsVisible="{Binding OwParam1Visible}" Margin="0,4,0,0">
+                    <TextBlock Text="{Binding OwParam1Label}" FontWeight="Bold"
+                               ToolTip.Tip="Stored in the second general parameter."/>
+                    <NumericUpDown Minimum="0" Maximum="65535" Value="{Binding OwParam1}"/>
+                  </StackPanel>
+
+                  <StackPanel Spacing="3" IsVisible="{Binding OwScriptSectionVisible}">
+                    <TextBlock Text="Script" FontWeight="Bold" Margin="0,4,0,0" ToolTip.Tip="Set by the item or trainer above unless Type is Standard"/>
+                    <controls:FusionAutoCompleteBox ItemsSource="{Binding AvailableScripts}" SelectedIndex="{Binding OwScriptIndex}" IsVisible="{Binding !OwScriptHasCommonInfo}" IsEnabled="{Binding OwScriptEnabled}" HorizontalAlignment="Stretch"/>
+                    <TextBlock Text="No such script"
+                               FontSize="10" Foreground="{DynamicResource Editor.Warn}" TextWrapping="Wrap" IsVisible="{Binding OwScriptGenericWarningVisible}"/>
+                    <Border IsVisible="{Binding OwScriptHasCommonInfo}" Background="{DynamicResource Editor.PanelBg}"
+                            BorderBrush="{DynamicResource Editor.Border}" BorderThickness="1" CornerRadius="3" Padding="6,4">
+                      <Grid ColumnDefinitions="*,Auto">
+                        <StackPanel Grid.Column="0" Spacing="1">
+                          <TextBlock Text="{Binding OwScriptCommonName}" FontWeight="SemiBold" TextWrapping="Wrap"/>
+                          <TextBlock Text="{Binding OwScriptCommonInfo}" FontSize="11" Foreground="{DynamicResource Editor.Subtle}" TextWrapping="Wrap"/>
+                        </StackPanel>
+                        <Button Grid.Column="1" Content="Rename" Tag="0" Click="RenameCommonScript_Click" VerticalAlignment="Center" Margin="6,0,0,0"
+                                ToolTip.Tip="Name this shared script for this project."/>
+                      </Grid>
+                    </Border>
+                    <Grid ColumnDefinitions="*,Auto">
+                      <NumericUpDown Grid.Column="0" Minimum="0" Maximum="65535" Value="{Binding OwScript}" IsEnabled="{Binding OwScriptEnabled}"/>
+                      <Button Grid.Column="1" Content="Go to script" controls:Icon.Key="goto" Margin="4,0,0,0" Click="GoToOwScript_Click"
+                              ToolTip.Tip="Open this script, following a common script to its own file."/>
+                    </Grid>
+                  </StackPanel>
+
+                  <TextBlock Text="Hide flag" FontWeight="Bold" Margin="0,4,0,0"
+                             ToolTip.Tip="While this flag is set, the overworld isn't placed on the map."/>
+                  <NumericUpDown Minimum="0" Maximum="65535" Value="{Binding OwFlag}"/>
+                  <TextBlock Text="Parameter 3" FontWeight="Bold" Margin="0,4,0,0"
+                             ToolTip.Tip="HeartGold reads this for walking Pokémon."/>
+                  <NumericUpDown Minimum="0" Maximum="65535" Value="{Binding OwParam2}"/>
+
+                </StackPanel>
+              </ScrollViewer>
+            </Grid>
+          </DockPanel>
+        </TabItem>
+
+        <TabItem Header="Warps">
+          <DockPanel Margin="4">
+            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="6" Margin="0,0,0,4">
+              <controls:IconImage Key="warp" VerticalAlignment="Center"/>
+              <Button Content="Add" controls:Icon.Key="addIcon" Click="AddWarp_Click"/>
+              <Button Content="Remove" controls:Icon.Key="deleteIcon" Click="RemoveWarp_Click" IsEnabled="{Binding HasWarp}"/>
+              <Button Content="Duplicate" controls:Icon.Key="copy" Click="DupWarp_Click" IsEnabled="{Binding HasWarp}"/>
+              <Rectangle Width="1" Fill="{DynamicResource Editor.Separator}" Margin="3,1"/>
+              <Button Content="Go to destination" controls:Icon.Key="goto" Click="TestWarp_Click" IsEnabled="{Binding HasWarp}"
+                      ToolTip.Tip="Show the destination header's event file here"/>
+            </StackPanel>
+            <Grid ColumnDefinitions="180,*">
+              <ListBox Grid.Column="0" ItemsSource="{Binding Warps}" SelectedIndex="{Binding SelectedWarpIndex}" Tag="warp" KeyDown="EventList_KeyDown"/>
+              <ScrollViewer Grid.Column="1" Margin="6,0,0,0" Padding="0,0,14,0">
+                <StackPanel Spacing="3" IsVisible="{Binding HasWarp}">
+                  <TextBlock Text="Position" FontWeight="Bold"/>
+                  <Grid ColumnDefinitions="72,*,72,*" RowDefinitions="Auto,Auto,Auto" Margin="0,2,0,0">
+                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Map X" VerticalAlignment="Center"/>
+                    <NumericUpDown Grid.Row="0" Grid.Column="1" Margin="0,0,6,3" Minimum="-32768" Maximum="32767" Increment="1" FormatString="0" Value="{Binding XMap}"/>
+                    <TextBlock Grid.Row="0" Grid.Column="2" Text="Map Y" VerticalAlignment="Center"/>
+                    <NumericUpDown Grid.Row="0" Grid.Column="3" Minimum="-32768" Maximum="32767" Increment="1" FormatString="0" Value="{Binding YMap}"/>
+                    <!-- No Z row: the warp record has no z field. Height below is the warp's elevation. -->
+                    <TextBlock Grid.Row="1" Grid.Column="0" Text="Matrix X" VerticalAlignment="Center"/>
+                    <NumericUpDown Grid.Row="1" Grid.Column="1" Margin="0,0,6,0" Minimum="0" Maximum="65535" Increment="1" FormatString="0" Value="{Binding XMatrix}"/>
+                    <TextBlock Grid.Row="1" Grid.Column="2" Text="Matrix Y" VerticalAlignment="Center"/>
+                    <NumericUpDown Grid.Row="1" Grid.Column="3" Minimum="0" Maximum="65535" Increment="1" FormatString="0" Value="{Binding YMatrix}"/>
+                  </Grid>
+                  <TextBlock Text="Destination header" FontWeight="Bold" Margin="0,4,0,0"/>
+                  <NumericUpDown controls:EditorLink.To="Header" Minimum="0" Maximum="65535" Value="{Binding WarpHeader}"/>
+                  <TextBlock Text="{Binding WarpHeaderName}" Foreground="{DynamicResource Editor.Subtle}" TextTrimming="CharacterEllipsis"/>
+                  <TextBlock Text="Destination warp" FontWeight="Bold" Margin="0,4,0,0"
+                             ToolTip.Tip="Which warp of the destination header the player comes out at."/>
+                  <NumericUpDown Minimum="0" Maximum="65535" Value="{Binding WarpAnchor}"/>
+                  <TextBlock Text="Height" FontWeight="Bold" Margin="0,4,0,0"/>
+                  <NumericUpDown Minimum="0" Maximum="4294967295" Value="{Binding WarpHeight}"/>
+                </StackPanel>
+              </ScrollViewer>
+            </Grid>
+          </DockPanel>
+        </TabItem>
+
+        <TabItem Header="Triggers">
+          <DockPanel Margin="4">
+            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="6" Margin="0,0,0,4">
+              <controls:IconImage Key="trigger" VerticalAlignment="Center"/>
+              <Button Content="Add" controls:Icon.Key="addIcon" Click="AddTrig_Click"/>
+              <Button Content="Remove" controls:Icon.Key="deleteIcon" Click="RemoveTrig_Click" IsEnabled="{Binding HasTrig}"/>
+              <Button Content="Duplicate" controls:Icon.Key="copy" Click="DupTrig_Click" IsEnabled="{Binding HasTrig}"/>
+            </StackPanel>
+            <Grid ColumnDefinitions="180,*">
+              <ListBox Grid.Column="0" ItemsSource="{Binding Triggers}" SelectedIndex="{Binding SelectedTriggerIndex}" Tag="trig" KeyDown="EventList_KeyDown"/>
+              <ScrollViewer Grid.Column="1" Margin="6,0,0,0" Padding="0,0,14,0">
+                <StackPanel Spacing="3" IsVisible="{Binding HasTrig}">
+                  <TextBlock Text="Position" FontWeight="Bold"/>
+                  <Grid ColumnDefinitions="72,*,72,*" RowDefinitions="Auto,Auto,Auto" Margin="0,2,0,0">
+                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Map X" VerticalAlignment="Center"/>
+                    <NumericUpDown Grid.Row="0" Grid.Column="1" Margin="0,0,6,3" Minimum="-32768" Maximum="32767" Increment="1" FormatString="0" Value="{Binding XMap}"/>
+                    <TextBlock Grid.Row="0" Grid.Column="2" Text="Map Y" VerticalAlignment="Center"/>
+                    <NumericUpDown Grid.Row="0" Grid.Column="3" Minimum="-32768" Maximum="32767" Increment="1" FormatString="0" Value="{Binding YMap}"/>
+                    <TextBlock Grid.Row="1" Grid.Column="0" Text="Z" VerticalAlignment="Top" Margin="0,5,0,0"/>
+                    <StackPanel Grid.Row="1" Grid.Column="1" Margin="0,0,6,3">
+                      <NumericUpDown Minimum="0" Maximum="65535" Increment="1" FormatString="0" Value="{Binding ZPos}"/>
+                      <TextBlock Text="{Binding ZPosNote}" FontSize="11" Margin="2,1,0,0"
+                                 TextWrapping="Wrap"
+                                 ToolTip.Tip="{Binding ZPosNoteTip}"
+                                 Foreground="{DynamicResource Editor.Subtle}"/>
+                    </StackPanel>
+                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Matrix X" VerticalAlignment="Center"/>
+                    <NumericUpDown Grid.Row="2" Grid.Column="1" Margin="0,0,6,0" Minimum="0" Maximum="65535" Increment="1" FormatString="0" Value="{Binding XMatrix}"/>
+                    <TextBlock Grid.Row="2" Grid.Column="2" Text="Matrix Y" VerticalAlignment="Center"/>
+                    <NumericUpDown Grid.Row="2" Grid.Column="3" Minimum="0" Maximum="65535" Increment="1" FormatString="0" Value="{Binding YMatrix}"/>
+                  </Grid>
+                  <TextBlock Text="Script" FontWeight="Bold" Margin="0,4,0,0"/>
+                  <controls:FusionAutoCompleteBox ItemsSource="{Binding AvailableScripts}" SelectedIndex="{Binding TrScriptIndex}" IsVisible="{Binding !TrScriptHasCommonInfo}" HorizontalAlignment="Stretch"/>
+                  <TextBlock Text="No such script"
+                             FontSize="10" Foreground="{DynamicResource Editor.Warn}" TextWrapping="Wrap" IsVisible="{Binding TrScriptGenericWarningVisible}"/>
+                  <Border IsVisible="{Binding TrScriptHasCommonInfo}" Background="{DynamicResource Editor.PanelBg}"
+                          BorderBrush="{DynamicResource Editor.Border}" BorderThickness="1" CornerRadius="3" Padding="6,4">
+                    <Grid ColumnDefinitions="*,Auto">
+                      <StackPanel Grid.Column="0" Spacing="1">
+                        <TextBlock Text="{Binding TrScriptCommonName}" FontWeight="SemiBold" TextWrapping="Wrap"/>
+                        <TextBlock Text="{Binding TrScriptCommonInfo}" FontSize="11" Foreground="{DynamicResource Editor.Subtle}" TextWrapping="Wrap"/>
+                      </StackPanel>
+                      <Button Grid.Column="1" Content="Rename" Tag="1" Click="RenameCommonScript_Click" VerticalAlignment="Center" Margin="6,0,0,0"
+                              ToolTip.Tip="Name this shared script for this project."/>
+                    </Grid>
+                  </Border>
+                  <Grid ColumnDefinitions="*,Auto">
+                    <NumericUpDown Grid.Column="0" Minimum="0" Maximum="65535" Value="{Binding TrScript}"/>
+                    <Button Grid.Column="1" Content="Go to script" controls:Icon.Key="goto" Margin="4,0,0,0" Click="GoToTrScript_Click"
+                            ToolTip.Tip="Open this script, following a common script to its own file."/>
+                  </Grid>
+                  <TextBlock Text="Width / height" FontWeight="Bold" Margin="0,4,0,0"/>
+                  <Grid ColumnDefinitions="72,*,72,*">
+                    <TextBlock Grid.Column="0" Text="Width" VerticalAlignment="Center"/>
+                    <NumericUpDown Grid.Column="1" Margin="0,0,6,0" Minimum="0" Maximum="65535" Value="{Binding TrWidth}"/>
+                    <TextBlock Grid.Column="2" Text="Height" VerticalAlignment="Center"/>
+                    <NumericUpDown Grid.Column="3" Minimum="0" Maximum="65535" Value="{Binding TrHeight}"/>
+                  </Grid>
+                  <StackPanel Orientation="Horizontal" Spacing="4" IsVisible="{Binding TrNeverFires}"
+                              ToolTip.Tip="Width or height is 0">
+                    <controls:IconImage Key="warning" VerticalAlignment="Center"/>
+                    <TextBlock Text="Never fires" Foreground="{DynamicResource Editor.Warn}" VerticalAlignment="Center"/>
+                  </StackPanel>
+                  <TextBlock Text="Variable watched / expected value" FontWeight="Bold" Margin="0,4,0,0"/>
+                  <Grid ColumnDefinitions="72,*,72,*">
+                    <TextBlock Grid.Column="0" Text="Variable" VerticalAlignment="Center"/>
+                    <NumericUpDown Grid.Column="1" Margin="0,0,6,0" Minimum="0" Maximum="65535" Value="{Binding TrVar}"
+                                   IsVisible="{Binding TrDecimal}"/>
+                    <TextBox Grid.Column="1" Margin="0,0,6,0" Text="{Binding TrVarHex}"
+                             IsVisible="{Binding TrHex}"/>
+                    <TextBlock Grid.Column="2" Text="Expected" VerticalAlignment="Center"/>
+                    <NumericUpDown Grid.Column="3" Minimum="0" Maximum="65535" Value="{Binding TrVarValue}"
+                                   IsVisible="{Binding TrDecimal}"/>
+                    <TextBox Grid.Column="3" Text="{Binding TrVarValueHex}" IsVisible="{Binding TrHex}"/>
+                  </Grid>
+                  <ToggleButton Content="Hex" IsChecked="{Binding TrHex}" HorizontalAlignment="Left"
+                                FontSize="12" Padding="8,2"
+                                ToolTip.Tip="Type the variable and expected value in hex instead of decimal."/>
+                </StackPanel>
+              </ScrollViewer>
+            </Grid>
+          </DockPanel>
+        </TabItem>
+
+        <TabItem Header="Spawnables">
+          <DockPanel Margin="4">
+            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="6" Margin="0,0,0,4">
+              <controls:IconImage Key="sign" VerticalAlignment="Center"/>
+              <Button Content="Add" controls:Icon.Key="addIcon" Click="AddSpawn_Click"/>
+              <Button Content="Remove" controls:Icon.Key="deleteIcon" Click="RemoveSpawn_Click" IsEnabled="{Binding HasSpawn}"/>
+              <Button Content="Duplicate" controls:Icon.Key="copy" Click="DupSpawn_Click" IsEnabled="{Binding HasSpawn}"/>
+            </StackPanel>
+            <Grid ColumnDefinitions="180,*">
+              <ListBox Grid.Column="0" ItemsSource="{Binding Spawnables}" SelectedIndex="{Binding SelectedSpawnableIndex}" Tag="spawn" KeyDown="EventList_KeyDown"/>
+              <ScrollViewer Grid.Column="1" Margin="6,0,0,0" Padding="0,0,14,0">
+                <StackPanel Spacing="3" IsVisible="{Binding HasSpawn}">
+                  <TextBlock Text="Position" FontWeight="Bold"/>
+                  <Grid ColumnDefinitions="72,*,72,*" RowDefinitions="Auto,Auto,Auto" Margin="0,2,0,0">
+                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Map X" VerticalAlignment="Center"/>
+                    <NumericUpDown Grid.Row="0" Grid.Column="1" Margin="0,0,6,3" Minimum="-32768" Maximum="32767" Increment="1" FormatString="0" Value="{Binding XMap}"/>
+                    <TextBlock Grid.Row="0" Grid.Column="2" Text="Map Y" VerticalAlignment="Center"/>
+                    <NumericUpDown Grid.Row="0" Grid.Column="3" Minimum="-32768" Maximum="32767" Increment="1" FormatString="0" Value="{Binding YMap}"/>
+                    <TextBlock Grid.Row="1" Grid.Column="0" Text="Z" VerticalAlignment="Top" Margin="0,5,0,0"/>
+                    <StackPanel Grid.Row="1" Grid.Column="1" Margin="0,0,6,3">
+                      <NumericUpDown Minimum="-32768" Maximum="2147483647" Increment="1" FormatString="0" Value="{Binding ZPos}"/>
+                      <TextBlock Text="{Binding ZPosNote}" FontSize="11" Margin="2,1,0,0"
+                                 TextWrapping="Wrap"
+                                 ToolTip.Tip="{Binding ZPosNoteTip}"
+                                 Foreground="{DynamicResource Editor.Subtle}"/>
+                    </StackPanel>
+                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Matrix X" VerticalAlignment="Center"/>
+                    <NumericUpDown Grid.Row="2" Grid.Column="1" Margin="0,0,6,0" Minimum="0" Maximum="65535" Increment="1" FormatString="0" Value="{Binding XMatrix}"/>
+                    <TextBlock Grid.Row="2" Grid.Column="2" Text="Matrix Y" VerticalAlignment="Center"/>
+                    <NumericUpDown Grid.Row="2" Grid.Column="3" Minimum="0" Maximum="65535" Increment="1" FormatString="0" Value="{Binding YMatrix}"/>
+                  </Grid>
+                  <StackPanel Spacing="3" IsVisible="{Binding SpHiddenPickerVisible}" Margin="0,4,0,0">
+                    <TextBlock Text="Hidden item" FontWeight="Bold"/>
+                    <DockPanel>
+                      <Image DockPanel.Dock="Left" Width="32" Height="32" Margin="0,0,4,0"
+                             Source="{Binding SpHiddenItemId, Converter={x:Static controls:GameIconConverter.Item}}"/>
+                      <controls:FusionAutoCompleteBox ItemsSource="{Binding HiddenItemEntries}" SelectedIndex="{Binding SpHiddenIndex}" HorizontalAlignment="Stretch"/>
+                    </DockPanel>
+                    <Button Content="Edit hidden items" controls:Icon.Key="pencil" Click="OpenHiddenItems_Click" HorizontalAlignment="Left"
+                            ToolTip.Tip="Change the item, amount and range in the hidden item table"/>
+                  </StackPanel>
+                  <StackPanel Spacing="3" IsVisible="{Binding SpScriptFieldsVisible}">
+                    <TextBlock Text="Script" FontWeight="Bold" Margin="0,4,0,0"/>
+                    <controls:FusionAutoCompleteBox ItemsSource="{Binding AvailableScripts}" SelectedIndex="{Binding SpScriptIndex}" IsVisible="{Binding !SpScriptHasCommonInfo}" HorizontalAlignment="Stretch"/>
+                    <TextBlock Text="No such script"
+                               FontSize="10" Foreground="{DynamicResource Editor.Warn}" TextWrapping="Wrap" IsVisible="{Binding SpScriptGenericWarningVisible}"/>
+                    <Border IsVisible="{Binding SpScriptHasCommonInfo}" Background="{DynamicResource Editor.PanelBg}"
+                            BorderBrush="{DynamicResource Editor.Border}" BorderThickness="1" CornerRadius="3" Padding="6,4">
+                      <Grid ColumnDefinitions="*,Auto">
+                        <StackPanel Grid.Column="0" Spacing="1">
+                          <TextBlock Text="{Binding SpScriptCommonName}" FontWeight="SemiBold" TextWrapping="Wrap"/>
+                          <TextBlock Text="{Binding SpScriptCommonInfo}" FontSize="11" Foreground="{DynamicResource Editor.Subtle}" TextWrapping="Wrap"/>
+                        </StackPanel>
+                        <Button Grid.Column="1" Content="Rename" Tag="2" Click="RenameCommonScript_Click" VerticalAlignment="Center" Margin="6,0,0,0"
+                                ToolTip.Tip="Name this shared script for this project."/>
+                      </Grid>
+                    </Border>
+                    <Grid ColumnDefinitions="*,Auto">
+                      <NumericUpDown Grid.Column="0" Minimum="0" Maximum="65535" Value="{Binding SpScript}"/>
+                      <Button Grid.Column="1" Content="Go to script" controls:Icon.Key="goto" Margin="4,0,0,0" Click="GoToSpScript_Click"
+                              ToolTip.Tip="Open this script, following a common script to its own file."/>
+                    </Grid>
+                  </StackPanel>
+                  <TextBlock Text="Type / direction" FontWeight="Bold" Margin="0,4,0,0"/>
+                  <Grid ColumnDefinitions="72,*" RowDefinitions="Auto,Auto" RowSpacing="4">
+                    <TextBlock Grid.Column="0" Text="Type" VerticalAlignment="Center"/>
+                    <controls:IdNameSelector Grid.Column="1" Value="{Binding SpType}" Names="{Binding SpawnableTypeNames}"/>
+                    <TextBlock Grid.Row="1" Grid.Column="0" Text="Direction" VerticalAlignment="Center"/>
+                    <controls:IdNameSelector Grid.Row="1" Grid.Column="1" Value="{Binding SpDir}" Names="{Binding SpawnableDirectionNames}"/>
+                  </Grid>
+                </StackPanel>
+              </ScrollViewer>
+            </Grid>
+          </DockPanel>
+        </TabItem>
+
+      </TabControl>
+    </Grid>
+  </DockPanel>
+</UserControl>

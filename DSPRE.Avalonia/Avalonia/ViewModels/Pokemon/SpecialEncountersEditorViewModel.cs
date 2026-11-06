@@ -1,0 +1,213 @@
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.Runtime.CompilerServices;
+using System.Threading.Tasks;
+using global::Avalonia.Controls;
+using DSPRE.Editors;
+using static DSPRE.RomInfo;
+
+namespace DSPRE.Avalonia.ViewModels.Pokemon
+{
+    /// <summary>
+    /// One tab per special encounter system: Honey Tree, Great Marsh and Trophy Garden in DPPt, Headbutt, Bug Contest
+    /// and Safari Zone in HGSS, and Swarms in both.
+    /// </summary>
+    public class SpecialEncountersEditorViewModel : INotifyPropertyChanged, IEditorWithUnsavedChanges, DSPRE.Avalonia.ISupportsUndo, IDetachable
+    {
+        public const string Title = "Special encounters editor";
+
+        public event PropertyChangedEventHandler PropertyChanged;
+        private void OnPropertyChanged([CallerMemberName] string n = null)
+            => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(n));
+
+        public HoneyTreeEncounterViewModel HoneyTreeVM { get; }
+        public GreatMarshEncounterViewModel GreatMarshVM { get; }
+        public TrophyGardenEncounterViewModel TrophyGardenVM { get; }
+        public HeadbuttEncounterViewModel HeadbuttVM { get; }
+        public BugContestEncounterViewModel BugContestVM { get; }
+        public BugContestTrainersViewModel BugContestTrainersVM { get; }
+        public SafariZoneEncounterViewModel SafariZoneVM { get; }
+        public SwarmsViewModel SwarmsVM { get; }
+        public RoamersViewModel RoamersVM { get; }
+
+        public bool ShowHoneyTree { get; }
+        public bool ShowGreatMarsh { get; }
+        public bool ShowTrophyGarden { get; }
+        public bool ShowHeadbutt { get; }
+        public bool ShowBugContest { get; }
+        public bool ShowBugContestOpponents => ShowBugContest && BetaEditors.Enabled;
+        public bool ShowSafariZone { get; }
+        public bool ShowSwarms { get; }
+        public bool ShowRoamers { get; }
+
+        /// <summary>Open on the Headbutt tab, as a "Go to Headbutt file" jump does.</summary>
+        public bool StartOnHeadbutt { get; }
+
+        private string _pendingNote = "";
+        public string PendingNote { get => _pendingNote; private set { _pendingNote = value; OnPropertyChanged(); } }
+        public bool HasPending => !string.IsNullOrEmpty(_pendingNote);
+
+        private IEditorWithUnsavedChanges[] Children => new IEditorWithUnsavedChanges[]
+        { HoneyTreeVM, GreatMarshVM, TrophyGardenVM, HeadbuttVM, BugContestVM, BugContestTrainersVM, SafariZoneVM, SwarmsVM, RoamersVM };
+
+        public bool HasUnsavedChanges
+        {
+            get { foreach (IEditorWithUnsavedChanges c in Children) if (c?.HasUnsavedChanges ?? false) return true; return false; }
+        }
+        public string UnsavedChangesDescription
+        {
+            get
+            {
+                List<string> parts = new List<string>();
+                foreach (IEditorWithUnsavedChanges c in Children)
+                    if (c?.HasUnsavedChanges ?? false) parts.Add(c.UnsavedChangesDescription);
+                return parts.Count > 0 ? string.Join(", ", parts) : Title;
+            }
+        }
+        public void SaveChanges() => DialogHelper.Watch(SaveChangesAsync());
+
+        public async Task<bool> SaveChangesAsync()
+        {
+            foreach (IEditorWithUnsavedChanges c in Children)
+                if (c?.HasUnsavedChanges ?? false) await c.SaveChangesAsync();
+            // A tab can refuse to save, so only a full save is announced.
+            if (HasUnsavedChanges) return false;
+            SaveNotice.Saved(Title);
+            return true;
+        }
+        public void DiscardChanges()
+        {
+            foreach (IEditorWithUnsavedChanges c in Children) c?.DiscardChanges();
+        }
+
+        // Undo and redo act on the tab that is showing; the window sets it.
+        private DSPRE.Avalonia.ISupportsUndo _activeTab;
+        public object ActiveTab { set { _activeTab = value as DSPRE.Avalonia.ISupportsUndo; OnPropertyChanged(nameof(CanUndo)); OnPropertyChanged(nameof(CanRedo)); } }
+        public bool CanUndo => _activeTab?.CanUndo == true;
+        public bool CanRedo => _activeTab?.CanRedo == true;
+        public void Undo() => _activeTab?.Undo();
+        public void Redo() => _activeTab?.Redo();
+
+        private void OnNamesChanged(object sender, System.EventArgs e) => RefreshNames();
+
+        /// <summary>Stops this editor and the swarm tab it owns listening to the app.</summary>
+        public void Detach()
+        {
+            AppEvents.NamesChanged -= OnNamesChanged;
+            SwarmsVM?.Detach();
+        }
+
+        public void RefreshNames()
+        {
+            HoneyTreeVM?.RefreshNames();
+            GreatMarshVM?.RefreshNames();
+            TrophyGardenVM?.RefreshNames();
+            HeadbuttVM?.RefreshNames();
+            BugContestVM?.RefreshNames();
+            BugContestTrainersVM?.RefreshNames();
+            SafariZoneVM?.RefreshNames();
+            SwarmsVM?.RefreshNames();
+            RoamersVM?.RefreshNames();
+        }
+
+        // Design-time constructor.
+        public SpecialEncountersEditorViewModel()
+        {
+            HoneyTreeVM = new HoneyTreeEncounterViewModel();
+            GreatMarshVM = new GreatMarshEncounterViewModel();
+            BugContestVM = new BugContestEncounterViewModel();
+            BugContestTrainersVM = new BugContestTrainersViewModel();
+            SafariZoneVM = new SafariZoneEncounterViewModel();
+            ShowHoneyTree = true;
+            ShowGreatMarsh = true;
+        }
+
+        /// <param name="headbuttOnly">An hg-engine ROM: only the encounters it builds from source are shown.</param>
+        /// <param name="headbuttFile">Headbutt file to open first, or -1 to open on the first tab.</param>
+        public SpecialEncountersEditorViewModel(bool headbuttOnly, int headbuttFile = -1)
+        {
+            AppEvents.NamesChanged += OnNamesChanged;
+            bool dppt = GameFamily == GameFamilies.DP || GameFamily == GameFamilies.Plat;
+            bool hgss = GameFamily == GameFamilies.HGSS;
+
+            if (dppt)
+            {
+                HoneyTreeVM = new HoneyTreeEncounterViewModel(true);
+                HoneyTreeVM.PropertyChanged += OnChildChanged;
+                ShowHoneyTree = true;
+
+                GreatMarshVM = new GreatMarshEncounterViewModel(true);
+                GreatMarshVM.PropertyChanged += OnChildChanged;
+                ShowGreatMarsh = true;
+
+                TrophyGardenVM = new TrophyGardenEncounterViewModel();
+                TrophyGardenVM.PropertyChanged += OnChildChanged;
+                ShowTrophyGarden = true;
+            }
+            else if (hgss)
+            {
+                // The tab sets it up when first shown; the 3D view is heavy.
+                HeadbuttVM = new HeadbuttEncounterViewModel(true) { InitialIndex = headbuttFile };
+                HeadbuttVM.PropertyChanged += OnChildChanged;
+                ShowHeadbutt = true;
+                StartOnHeadbutt = headbuttFile >= 0 || headbuttOnly;
+
+                if (!headbuttOnly)
+                {
+                    BugContestVM = new BugContestEncounterViewModel(true);
+                    BugContestVM.PropertyChanged += OnChildChanged;
+                    BugContestTrainersVM = new BugContestTrainersViewModel();
+                    BugContestTrainersVM.PropertyChanged += OnChildChanged;
+                    ShowBugContest = true;
+                }
+
+                // A linked checkout's data/SafariEncounters.c is edited directly.
+                if (!headbuttOnly || DSPRE.HgEngine.HgEngineProject.IsActive)
+                {
+                    SafariZoneVM = new SafariZoneEncounterViewModel(true);
+                    SafariZoneVM.PropertyChanged += OnChildChanged;
+                    ShowSafariZone = true;
+                }
+            }
+            else
+            {
+                PendingNote = "Not in this game";
+            }
+            // A linked checkout's src/swarms.c is edited directly.
+            if ((dppt || (hgss && (!headbuttOnly || DSPRE.HgEngine.HgEngineProject.IsActive))) && BetaEditors.Enabled)
+            {
+                SwarmsVM = new SwarmsViewModel();
+                SwarmsVM.PropertyChanged += OnChildChanged;
+                ShowSwarms = true;
+                RoamersVM = new RoamersViewModel();
+                RoamersVM.PropertyChanged += OnChildChanged;
+                ShowRoamers = true;
+            }
+            OnPropertyChanged(nameof(HasPending));
+        }
+
+        private void OnChildChanged(object sender, PropertyChangedEventArgs e)
+        {
+            if (e.PropertyName == nameof(IEditorWithUnsavedChanges.HasUnsavedChanges))
+                OnPropertyChanged(nameof(HasUnsavedChanges));
+        }
+
+        public async Task SetupAsync(Window owner)
+        {
+            if (ShowHoneyTree && HoneyTreeVM != null)
+                await HoneyTreeVM.SetupAsync(owner);
+            if (ShowGreatMarsh && GreatMarshVM != null)
+                await GreatMarshVM.SetupAsync(owner);
+            if (ShowBugContest && BugContestVM != null)
+                await BugContestVM.SetupAsync(owner);
+            if (ShowBugContest && BugContestTrainersVM != null)
+                BugContestTrainersVM.Setup();
+            if (ShowSafariZone && SafariZoneVM != null)
+                await SafariZoneVM.SetupAsync(owner);
+            if (ShowSwarms && SwarmsVM != null)
+                SwarmsVM.Setup();
+            if (ShowRoamers && RoamersVM != null)
+                RoamersVM.Setup();
+        }
+    }
+}

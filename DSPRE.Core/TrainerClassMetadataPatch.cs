@@ -1,0 +1,335 @@
+using DSPRE.ROMFiles;
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Reflection;
+using System.Text;
+
+namespace DSPRE
+{
+    /// <summary>
+    /// The external Trainer Class Metadata patch v1.0.0 by MrHam88 (PR #272, MIT licence), for US HeartGold and SoulSilver.
+    /// The armips source was assembled once and kept as original and patched bytes for every native write, plus the
+    /// payload and the places that refer to where it sits, so it can be placed anywhere in the synthetic overlay.
+    /// Building a/1/5/5 from the game's own tables is a port of the patch's build_trainer_class_metadata_narc.py.
+    /// </summary>
+    public static class TrainerClassMetadataPatch
+    {
+        public const int PayloadSize = 0x2068;
+
+        public static bool SupportsCurrentRom =>
+            RomInfo.GameLanguage == RomInfo.GameLanguages.English && RomInfo.GameFamily == RomInfo.GameFamilies.HGSS;
+
+        private sealed class Reloc { public byte Kind; public bool Blx; public uint Offset, Value; }
+        private sealed class Span { public uint Offset; public byte[] Original, Patched; }
+        private sealed class Target { public string Path; public List<Span> Spans = new(); public List<Reloc> Relocs = new(); }
+        private sealed class Data { public byte[] Payload; public List<Reloc> PayloadRelocs = new(); public List<Target> Targets = new(); }
+
+        private static Data _data;
+
+        private static Data Load()
+        {
+            if (_data != null) return _data;
+            using Stream s = Assembly.GetExecutingAssembly().GetManifestResourceStream("DSPRE.Resources.ROMToolboxDB.TrainerClassMetadataPatch.bin")
+                ?? throw new InvalidOperationException("The trainer class metadata patch data is missing from this build.");
+            using BinaryReader r = new BinaryReader(s);
+            if (Encoding.ASCII.GetString(r.ReadBytes(4)) != "TCMP" || r.ReadUInt16() != 1) throw new InvalidDataException("Unknown trainer class metadata patch data.");
+            Data d = new Data { Payload = r.ReadBytes(r.ReadInt32()) };
+            Reloc ReadReloc() { Reloc x = new Reloc { Kind = r.ReadByte(), Blx = r.ReadByte() != 0 }; r.ReadUInt16(); x.Offset = r.ReadUInt32(); x.Value = r.ReadUInt32(); return x; }
+            for (int i = r.ReadInt32(); i > 0; i--) d.PayloadRelocs.Add(ReadReloc());
+            for (int f = r.ReadUInt16(); f > 0; f--)
+            {
+                Target t = new Target { Path = Encoding.ASCII.GetString(r.ReadBytes(r.ReadUInt16())) };
+                for (int i = r.ReadInt32(); i > 0; i--)
+                {
+                    uint off = r.ReadUInt32(); int len = r.ReadInt32();
+                    t.Spans.Add(new Span { Offset = off, Original = r.ReadBytes(len), Patched = r.ReadBytes(len) });
+                }
+                for (int i = r.ReadInt32(); i > 0; i--) t.Relocs.Add(ReadReloc());
+                d.Targets.Add(t);
+            }
+            return _data = d;
+        }
+
+        private static string PathOf(string target)
+        {
+            if (target == "arm9/arm9.bin") return RomInfo.Arm9Path;
+            int overlay = int.Parse(Path.GetFileNameWithoutExtension(target).Substring(2));
+            return OverlayUtils.GetPath(overlay);
+        }
+
+        private static int OverlayOf(string target) =>
+            target.StartsWith("arm9_overlays/", StringComparison.Ordinal) ? int.Parse(Path.GetFileNameWithoutExtension(target).Substring(2)) : -1;
+
+        /// <summary>Thumb BL, or BLX into ARM code, from <paramref name="source"/> to <paramref name="target"/>.</summary>
+        private static byte[] Branch(uint source, uint target, bool blx)
+        {
+            int offset = blx ? (int)(target - ((source + 4) & ~3u)) : (int)(target - (source + 4));
+            ushort hi = (ushort)(0xF000 | ((offset >> 12) & 0x7FF));
+            ushort lo = (ushort)((blx ? 0xE800 : 0xF800) | ((offset >> 1) & 0x7FF));
+            return BitConverter.GetBytes(hi).Concat(BitConverter.GetBytes(lo)).ToArray();
+        }
+
+        /// <summary>The payload for a runtime address.</summary>
+        public static byte[] BuildPayload(uint address)
+        {
+            Data d = Load();
+            byte[] p = (byte[])d.Payload.Clone();
+            foreach (Reloc x in d.PayloadRelocs)
+            {
+                byte[] bytes = x.Kind == 0 ? Branch(address + x.Offset, x.Value, x.Blx) : BitConverter.GetBytes(address + x.Value);
+                bytes.CopyTo(p, (int)x.Offset);
+            }
+            return p;
+        }
+
+        /// <summary>
+        /// Where an installed copy's routines sit in the synthetic overlay, read back from the first ARM9 pointer the
+        /// install wrote (the payload address plus a known offset); null when it can't be told.
+        /// </summary>
+        public static uint? InstalledOffset()
+        {
+            try
+            {
+                Target arm9 = Load().Targets.FirstOrDefault(t => t.Path == "arm9/arm9.bin");
+                Reloc pointer = arm9?.Relocs.FirstOrDefault(x => x.Kind != 2);
+                if (pointer == null) return null;
+                byte[] file = File.ReadAllBytes(RomInfo.Arm9Path);
+                if (pointer.Offset + 4 > file.Length) return null;
+                uint address = BitConverter.ToUInt32(file, (int)pointer.Offset) - pointer.Value;
+                return address >= RomInfo.SynthOverlayLoadAddress && address - RomInfo.SynthOverlayLoadAddress + PayloadSize <= RomInfo.SynthOverlaySize ? address - RomInfo.SynthOverlayLoadAddress : null;
+            }
+            catch (Exception ex) when (ex is IOException || ex is InvalidDataException || ex is InvalidOperationException) { return null; }
+        }
+
+        /// <summary>The payload with everything that depends on its address zeroed, for the range check.</summary>
+        public static byte[] Footprint => new byte[PayloadSize];
+
+        /// <summary>Why the project can't take the patch as it stands, or null.</summary>
+        public static string WhyNotApplicable()
+        {
+            Data d = Load();
+            foreach (Target t in d.Targets)
+            {
+                int overlay = OverlayOf(t.Path);
+                if (overlay >= 0 && OverlayUtils.IsCompressed(overlay)) OverlayUtils.Decompress(overlay);
+                byte[] file = File.ReadAllBytes(PathOf(t.Path));
+                foreach (Span s in t.Spans)
+                    if (s.Offset + s.Original.Length > file.Length || !file.AsSpan((int)s.Offset, s.Original.Length).SequenceEqual(s.Original))
+                        return $"{t.Path} at 0x{s.Offset:X} isn't the unmodified US HeartGold/SoulSilver code the patch hooks. " +
+                            "Another patch or edit has changed it.";
+            }
+            try { BuildRecords(); }
+            catch (InvalidDataException ex) { return ex.Message; }
+            return null;
+        }
+
+        /// <summary>Builds a/1/5/5 from the game's tables, then writes the payload and every hook.</summary>
+        public static void Apply(uint payloadOffset)
+        {
+            Data d = Load();
+            List<byte[]> records = BuildRecords();   // before the hooks retire the tables it reads
+            uint address = RomInfo.SynthOverlayLoadAddress + payloadOffset;
+            foreach (Target t in d.Targets)
+            {
+                string path = PathOf(t.Path);
+                byte[] file = File.ReadAllBytes(path);
+                foreach (Span s in t.Spans) s.Patched.CopyTo(file, (int)s.Offset);
+                uint fileBase = t.Path == "arm9/arm9.bin" ? ARM9.Address : OverlayUtils.OverlayTable.GetRAMAddress(OverlayOf(t.Path));
+                foreach (Reloc x in t.Relocs)
+                {
+                    byte[] bytes = x.Kind == 2 ? Branch(fileBase + x.Offset, address + x.Value, x.Blx) : BitConverter.GetBytes(address + x.Value);
+                    bytes.CopyTo(file, (int)x.Offset);
+                }
+                ArchiveMembers.Write(path, file);
+            }
+            DSUtils.WriteToFile(Filesystem.ExpArmPath, BuildPayload(address), payloadOffset);
+            WriteArchive(records);
+            TrainerClassMetadataStore.Reset();
+        }
+
+        // ── a/1/5/5 from the game's tables (port of build_trainer_class_metadata_narc.py) ──────────────────
+        private const int RecordSize = 0x34, DefaultCombo = 0x29;
+        private const ushort DefaultEyeMusic = 1108;
+
+        private static readonly ushort[] Style0Small = { 0, 4, 6, 5 }, Style0Large = { 0, 7, 9, 8 };
+        private static readonly ushort[] StandardSymbols = { 0x3B, 0x3C, 0x3D, 0x3E }, FrontierSymbols = { 0x3B, 0xCC, 0xCD, 0xCE };
+        private static readonly ushort[] ExpectedTrainerComboRows =
+        {
+            66, 1091, 2118, 3144, 4170, 5195, 6217, 7244, 8290, 9319, 10344, 11369, 12394, 13419, 14444, 15470,
+            16471, 17497, 18544, 19544, 20566, 21527, 21623, 32884, 33906, 31861, 30838, 34940, 29751, 29758, 44079, 45165,
+        };
+        private static readonly ushort[] ExpectedComboEffects =
+        {
+            12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 29, 30, 31, 32, 33, 28, 0xFFFF, 0xFFFF, 0xFFFF,
+            35, 36, 34, 34, 39, 40, 41, 42, 43, 44, 37, 37, 38, 38, 37, 38, 0xFFFF, 0xFFFF, 45, 46,
+        };
+        private static readonly ushort[] ExpectedEyeMusicClasses =
+        {
+            2, 3, 4, 5, 6, 8, 9, 11, 14, 20, 21, 24, 25, 69, 31, 34, 36, 38, 42, 43, 46, 47, 49, 52, 55, 56, 60, 62, 63, 64,
+            65, 68, 77, 78, 79, 82, 113, 115, 121, 122, 116, 114, 117, 118,
+        };
+        // Effects 12 to 27 are the gym records in order and 28 the rival's, 29 to 33 the league's, 40 to 44 the executives'.
+        private const int FirstGymEffect = 12, RivalEffect = 28, FirstLeagueEffect = 29, LastLeagueEffect = 33,
+            FirstExecutiveEffect = 40, LastExecutiveEffect = 44, LeagueRecordSize = 8, ExecutiveRecordSize = 8;
+        private static readonly Dictionary<int, ushort[]> Vs8BackgroundByEffect = new()
+        {
+            [29] = new ushort[] { 0x2F, 0x30, 0x31, 0x32 }, [30] = new ushort[] { 0x33, 0x30, 0x31, 0x32 }, [31] = new ushort[] { 0x34, 0x30, 0x31, 0x32 },
+            [32] = new ushort[] { 0x35, 0x30, 0x31, 0x32 }, [33] = new ushort[] { 0x36, 0x30, 0x31, 0x32 },
+        };
+        private static readonly Dictionary<int, int> FrontierBrainRowByClass = new() { [97] = 0, [99] = 4, [100] = 1, [101] = 5, [102] = 3 };
+
+        private static ushort U16(byte[] d, int at) => BitConverter.ToUInt16(d, at);
+        private static uint U32(byte[] d, int at) => BitConverter.ToUInt32(d, at);
+        private static void Put16(byte[] r, int at, int v) => BitConverter.GetBytes(checked((ushort)v)).CopyTo(r, at);
+        private static void Put32(byte[] r, int at, uint v) => BitConverter.GetBytes(v).CopyTo(r, at);
+        private static void Quartet(byte[] r, int at, IReadOnlyList<int> v) { for (int i = 0; i < 4; i++) Put16(r, at + i * 2, v[i]); }
+        private static void Quartet(byte[] r, int at, ushort[] v) => Quartet(r, at, v.Select(x => (int)x).ToArray());
+
+        private static byte[] Slice(byte[] d, long at, int size, string what)
+        {
+            if (at < 0 || at + size > d.Length) throw new InvalidDataException($"The {what} lies outside its file.");
+            return d.Skip((int)at).Take(size).ToArray();
+        }
+
+        private static List<byte[]> BuildRecords()
+        {
+            RomInfo.VsIntroSites sites = RomLocator.VsIntroSites ?? throw new InvalidDataException("This ROM's VS intro records aren't mapped.");
+            RomInfo.TrainerPrizeTable prize = RomLocator.TrainerPrizeTable ?? throw new InvalidDataException("This ROM's prize table isn't mapped.");
+            RomInfo.FrontierBrainTable brains = RomInfo.FrontierBrains ?? throw new InvalidDataException("This ROM's Frontier Brain table isn't mapped.");
+            BattleMusicTables music = BattleMusicTables.LoadRom() ?? throw new InvalidDataException("The battle music tables couldn't be read.");
+            List<EncounterMusicTable.Row> eyeMusic = EncounterMusicTable.Read().Rows;
+            int classCount = RomInfo.VanillaTrainerClassCount;
+
+            byte[] arm9 = File.ReadAllBytes(RomInfo.Arm9Path);
+            byte[] Ov(int n) { if (OverlayUtils.IsCompressed(n)) OverlayUtils.Decompress(n); return File.ReadAllBytes(OverlayUtils.GetPath(n)); }
+            byte[] prizeOverlay = Ov(prize.Overlay), brainOverlay = Ov(brains.Overlay), recordOverlay = Ov(sites.RecordOverlay),
+                executiveOverlay = Ov(sites.ExecutiveOverlay);
+
+            byte[] genders = Slice(arm9, RomInfo.TrainerClassGenderTableOffset, classCount, "gender table");
+            ushort[] comboRows = music.Classes.Rows.Select(r => (ushort)((r.Class & 0x3FF) | (r.Combo << 10))).ToArray();
+            if (!comboRows.SequenceEqual(ExpectedTrainerComboRows))
+                throw new InvalidDataException("The trainer-to-combo table isn't the retail US HeartGold/SoulSilver one, which the patch's builder needs.");
+            Dictionary<int, int> comboByClass = comboRows.ToDictionary(r => r & 0x3FF, r => r >> 10);
+
+            (ushort Effect, ushort Music)[] combos = music.Combos.Rows.Select(c => (Effect: c.Transition, Music: c.Sequence)).ToArray();
+            if (!combos.Select(c => c.Effect).SequenceEqual(ExpectedComboEffects))
+                throw new InvalidDataException("The combo table's effects aren't the retail US HeartGold/SoulSilver ones.");
+
+            (ushort Class, ushort Main, ushort Alt)[] eyeRows = eyeMusic.Select(e => (Class: e.Class, Main: e.Music, Alt: e.NightMusic ?? e.Music)).ToArray();
+            if (!eyeRows.Select(e => e.Class).SequenceEqual(ExpectedEyeMusicClasses))
+                throw new InvalidDataException("The eye-contact music table's classes aren't the retail US HeartGold/SoulSilver ones.");
+            Dictionary<int, (ushort Main, ushort Alt)> eyeByClass = eyeRows.ToDictionary(e => (int)e.Class, e => (e.Main, e.Alt));
+
+            byte[] prizeBlob = Slice(prizeOverlay, prize.Table, prize.Count * 4, "prize table");
+            (int Class, ushort Coefficient)[] prizeRows = Enumerable.Range(0, prize.Count).Select(i => (Class: (int)U16(prizeBlob, i * 4), Coefficient: U16(prizeBlob, i * 4 + 2))).ToArray();
+            if (!prizeRows.Select(p => p.Class).OrderBy(x => x).SequenceEqual(Enumerable.Range(0, classCount)))
+                throw new InvalidDataException("The prize table doesn't hold each trainer class 0 to 128 once.");
+            Dictionary<int, ushort> prizeByClass = prizeRows.ToDictionary(p => p.Class, p => p.Coefficient);
+
+            byte[] brainTable = Slice(brainOverlay, brains.Table, brains.Count * brains.RowSize, "Frontier Brain table");
+
+            List<byte[]> records = new List<byte[]>();
+            for (int c = 0; c < classCount; c++)
+            {
+                byte[] r = new byte[RecordSize];
+                Put16(r, 0x00, genders[c]);
+                Put16(r, 0x02, prizeByClass[c]);
+                (ushort eyeMain, ushort eyeAlt) = eyeByClass.TryGetValue(c, out (ushort Main, ushort Alt) e) ? e : (DefaultEyeMusic, DefaultEyeMusic);
+                Put16(r, 0x04, eyeMain);
+                Put16(r, 0x06, eyeAlt);
+                int comboId = comboByClass.TryGetValue(c, out int cb) ? cb : DefaultCombo;
+                (ushort effect, ushort battleMusic) = combos[comboId];
+                Put16(r, 0x08, battleMusic);
+
+                if (effect >= FirstGymEffect && effect <= RivalEffect)
+                {
+                    long vs20 = effect == RivalEffect ? sites.RivalRecord : sites.GymTable + (effect - FirstGymEffect) * sites.GymSize;
+                    byte[] s = Slice(recordOverlay, vs20, sites.GymSize, "style 1 recipe");
+                    Put16(r, 0x0A, 1);
+                    bool savedRival = U16(s, 0x08) == 0x17;
+                    Put16(r, 0x0C, savedRival ? 0 : (int)U32(s, 0x04));
+                    r[0x0E] = (byte)(savedRival ? 1 : 0);
+                    Put32(r, 0x10, U32(s, 0x00));
+                    Quartet(r, 0x24, new[] { (int)s[0x0C], s[0x0D], s[0x0E], s[0x0F] });
+                    Put16(r, 0x16, s[0x10]); Put16(r, 0x18, s[0x11]); Put16(r, 0x1E, s[0x12]);
+                    Quartet(r, 0x2C, StandardSymbols);
+                }
+                else if (effect >= FirstLeagueEffect && effect <= LastLeagueEffect)
+                {
+                    byte[] s = Slice(recordOverlay, sites.LeagueTable + (effect - FirstLeagueEffect) * LeagueRecordSize, LeagueRecordSize, "style 2 recipe");
+                    Put16(r, 0x0A, 2);
+                    Put16(r, 0x0C, U16(s, 0x06));
+                    Put16(r, 0x14, s[0x03]);
+                    int portrait = U16(s, 0x00);
+                    Quartet(r, 0x24, new[] { portrait, portrait + 1, portrait + 2, portrait + 3 });
+                    Quartet(r, 0x16, Vs8BackgroundByEffect[effect]);
+                    Quartet(r, 0x2C, StandardSymbols);
+                }
+                else if (effect >= FirstExecutiveEffect && effect <= LastExecutiveEffect)
+                {
+                    byte[] s = Slice(executiveOverlay, sites.ExecutiveTable + (effect - FirstExecutiveEffect) * ExecutiveRecordSize, ExecutiveRecordSize, "style 3 recipe");
+                    Put16(r, 0x0A, 3);
+                    Put16(r, 0x0C, (int)U32(s, 0x04));
+                    Quartet(r, 0x24, new[] { (int)s[0], s[1], s[2], s[3] });
+                    Put16(r, 0x16, 0xD7); Put16(r, 0x18, 0xD8); Put16(r, 0x1E, 0xD9); Put16(r, 0x20, 0xDA); Put16(r, 0x22, 0xDD);
+                }
+                else if (c == 47 && effect == 45) { Put16(r, 0x0A, 4); Put16(r, 0x16, 0xA6); Put16(r, 0x18, 0xA7); Put16(r, 0x1E, 0xA8); }
+                else if (c == 109 && effect == 46) { Put16(r, 0x0A, 5); Quartet(r, 0x16, new[] { 0x01, 0x0A, 0x0C, 0x0B }); }
+                else if ((c == 55 || c == 62) && effect == 39) { Put16(r, 0x0A, 6); Quartet(r, 0x16, new[] { 0x03, 0x9C, 0x9E, 0x9D }); }
+                else { Quartet(r, 0x16, Style0Small); Quartet(r, 0x24, Style0Large); }
+
+                if (FrontierBrainRowByClass.TryGetValue(c, out int row))
+                {
+                    Array.Clear(r, 0x0A, RecordSize - 0x0A);
+                    byte[] s = brainTable.Skip(row * 0x0C).Take(0x0C).ToArray();
+                    Put16(r, 0x0A, 13);
+                    Put16(r, 0x0C, (int)U32(s, 0x00));
+                    Quartet(r, 0x24, new[] { (int)s[4], s[5], s[6], s[7] });
+                    Put16(r, 0x16, s[8]); Put16(r, 0x18, s[9]); Put16(r, 0x1E, s[10]);
+                    Quartet(r, 0x2C, FrontierSymbols);
+                }
+                records.Add(r);
+            }
+            return records;
+        }
+
+        /// <summary>Packs the records the way the builder does and writes both the packed and the unpacked archive.</summary>
+        private static void WriteArchive(List<byte[]> records)
+        {
+            List<byte> gmif = new List<byte>();
+            List<byte> fat = new List<byte>();
+            foreach (byte[] rec in records)
+            {
+                int start = gmif.Count;
+                gmif.AddRange(rec);
+                fat.AddRange(BitConverter.GetBytes(start));
+                fat.AddRange(BitConverter.GetBytes(gmif.Count));
+                while (gmif.Count % 4 != 0) gmif.Add(0xFF);
+            }
+            byte[] btaf = Encoding.ASCII.GetBytes("BTAF").Concat(BitConverter.GetBytes(12 + fat.Count)).Concat(BitConverter.GetBytes((ushort)records.Count))
+                .Concat(BitConverter.GetBytes((ushort)0)).Concat(fat).ToArray();
+            byte[] btnf = Encoding.ASCII.GetBytes("BTNF").Concat(BitConverter.GetBytes(16)).Concat(BitConverter.GetBytes(4)).Concat(BitConverter.GetBytes(0x00010000)).ToArray();
+            byte[] gmifChunk = Encoding.ASCII.GetBytes("GMIF").Concat(BitConverter.GetBytes(8 + gmif.Count)).Concat(gmif).ToArray();
+            int total = 16 + btaf.Length + btnf.Length + gmifChunk.Length;
+            byte[] narc = Encoding.ASCII.GetBytes("NARC").Concat(BitConverter.GetBytes((ushort)0xFFFE)).Concat(BitConverter.GetBytes((ushort)0x0100))
+                .Concat(BitConverter.GetBytes(total)).Concat(BitConverter.GetBytes((ushort)16)).Concat(BitConverter.GetBytes((ushort)3))
+                .Concat(btaf).Concat(btnf).Concat(gmifChunk).ToArray();
+
+            (string packed, string unpacked) = RomInfo.GameDirs[RomInfo.DirNames.TrainerClassMetadata];
+            PlainFiles.WriteBytes(packed, narc);
+            if (!Directory.Exists(unpacked)) return;
+            ArchiveMembers.Batch members = new ArchiveMembers.Batch();
+            for (int i = 0; i < records.Count; i++) members.Put(RomInfo.DirNames.TrainerClassMetadata, i, records[i]);
+            foreach (string f in Directory.GetFiles(unpacked))
+            {
+                if (!int.TryParse(Path.GetFileName(f), out int id)) members.DeleteFile(f);
+                else if (id >= records.Count) members.Delete(RomInfo.DirNames.TrainerClassMetadata, id);
+            }
+            if (!members.TryCommit(out string error)) throw new IOException(error);
+            // The packed archive was built here, not by Narc.Save, so the drift check is told it matches.
+            NarcSync.NoteSaved(unpacked, packed);
+        }
+    }
+}

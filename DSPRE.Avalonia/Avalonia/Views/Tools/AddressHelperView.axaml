@@ -1,0 +1,48 @@
+<Window xmlns="https://github.com/avaloniaui"
+		xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+		xmlns:controls="clr-namespace:DSPRE.Avalonia.Controls"
+		xmlns:vm="clr-namespace:DSPRE.Avalonia.ViewModels.Tools"
+		x:Class="DSPRE.Avalonia.Views.Tools.AddressHelperView"
+		x:DataType="vm:AddressHelperViewModel"
+		Title="Address helper"
+		Width="480" SizeToContent="Height"
+		MinWidth="480" MinHeight="260"
+		CanResize="True"
+		WindowStartupLocation="CenterOwner">
+  <Design.DataContext>
+    <vm:AddressHelperViewModel/>
+  </Design.DataContext>
+
+
+	<DockPanel>
+		<controls:EditorToolbar>
+				<TextBlock Text="RAM address (hex)"/>
+				<TextBox x:Name="AddressBox" Width="130"
+						 Text="{Binding AddressInput}"
+						 PlaceholderText="e.g. 02004800"/>
+				<Button Content="Search" controls:Icon.Key="lens" Click="SearchButton_Click"/>
+		</controls:EditorToolbar>
+
+	<DockPanel Margin="8">
+
+		<TextBlock DockPanel.Dock="Top" Text="{Binding StatusText}"
+				   Foreground="{DynamicResource Editor.Bad}"
+				   IsVisible="{Binding StatusText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+
+		<Border BorderThickness="1" BorderBrush="{DynamicResource SystemControlForegroundBaseMediumBrush}">
+			<DataGrid ItemsSource="{Binding Results}"
+					  AutoGenerateColumns="False"
+					  CanUserReorderColumns="True"
+					  CanUserResizeColumns="True"
+					  IsReadOnly="True"
+>
+				<DataGrid.Columns>
+					<DataGridTextColumn Header="Location" Binding="{Binding Location}" Width="*"/>
+					<DataGridTextColumn Header="Offset"   Binding="{Binding Offset}"   Width="*"/>
+				</DataGrid.Columns>
+			</DataGrid>
+		</Border>
+
+	</DockPanel>
+	</DockPanel>
+</Window>

@@ -1,0 +1,105 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Design.PreviewWith>
+        <Grid Background="DimGray">
+            <CheckBox Content="Ello"/>
+        </Grid>
+    </Design.PreviewWith>
+    <ControlTheme x:Key="{x:Type CheckBox}" TargetType="{x:Type CheckBox}">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource OptionMark.Static.Border}"/>
+        <Setter Property="Foreground" Value="{DynamicResource ABrush.Foreground.Static}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="Padding" Value="4,0,0,0"/>
+        <Setter Property="VerticalContentAlignment" Value="Center"/>
+        <Setter Property="HorizontalContentAlignment" Value="Left"/>
+        <Setter Property="Template">
+            <ControlTemplate>
+                <!-- A background makes the gap between box and label part of the check box, so the tooltip stays put. -->
+                <Grid ColumnDefinitions="Auto,*" Background="{TemplateBinding Background}">
+                    <Border x:Name="border"
+                            Width="16"
+                            Height="16"
+                            VerticalAlignment="Center"
+                            Background="{DynamicResource OptionMark.Static.Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}"
+                            CornerRadius="2">
+                        <Panel>
+                            <Path x:Name="checkMark"
+                                  HorizontalAlignment="Center"
+                                  VerticalAlignment="Center"
+                                   Stroke="{DynamicResource OptionMark.Static.Glyph}"
+                                   StrokeThickness="2"
+                                   StrokeLineCap="Round"
+                                   StrokeJoin="Round"
+                                   Data="M 3,8 L 7,12.5 L 13.5,3"/>
+                            <Rectangle x:Name="indeterminateMark"
+                                       Width="9"
+                                       Height="9"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"
+                                       Fill="{DynamicResource OptionMark.Static.Glyph}"
+                                       Stretch="Uniform"/>
+                        </Panel>
+                    </Border>
+                    <ContentPresenter x:Name="PART_ContentPresenter"
+                                      Grid.Column="1"
+                                      Margin="{TemplateBinding Padding}"
+                                      HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                      VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                      Content="{TemplateBinding Content}"
+                                      ContentTemplate="{TemplateBinding ContentTemplate}"
+                                      IsVisible="{TemplateBinding Content, Converter={x:Static ObjectConverters.IsNotNull}}"
+                                      RecognizesAccessKey="True"
+                                      TextElement.Foreground="{TemplateBinding Foreground}"/>
+                </Grid>
+            </ControlTemplate>
+        </Setter>
+        <Style Selector="^:pointerover /template/ Border#border">
+            <Setter Property="Background" Value="{DynamicResource OptionMark.MouseOver.Background}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource OptionMark.MouseOver.Border}"/>
+        </Style>
+        <Style Selector="^:pressed /template/ Border#border">
+            <Setter Property="Background" Value="{DynamicResource OptionMark.Pressed.Background}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource OptionMark.Pressed.Border}"/>
+        </Style>
+        <Style Selector="^ /template/ Path#checkMark">
+            <Setter Property="IsVisible" Value="False"/>
+        </Style>
+        <Style Selector="^ /template/ Rectangle#indeterminateMark">
+            <Setter Property="IsVisible" Value="False"/>
+        </Style>
+        <Style Selector="^:checked /template/ Path#checkMark">
+            <Setter Property="IsVisible" Value="True"/>
+        </Style>
+        <Style Selector="^:pressed /template/ Path#checkMark">
+            <Setter Property="Stroke" Value="{DynamicResource OptionMark.Pressed.Glyph}"/>
+        </Style>
+        <Style Selector="^:pointerover /template/ Path#checkMark">
+            <Setter Property="Stroke" Value="{DynamicResource OptionMark.MouseOver.Glyph}"/>
+        </Style>
+        <Style Selector="^:indeterminate /template/ Rectangle#indeterminateMark">
+            <Setter Property="IsVisible" Value="True"/>
+        </Style>
+        <Style Selector="^:pressed /template/ Rectangle#indeterminateMark">
+            <Setter Property="Fill" Value="{DynamicResource OptionMark.Pressed.Glyph}"/>
+        </Style>
+        <Style Selector="^:pointerover /template/ Rectangle#indeterminateMark">
+            <Setter Property="Fill" Value="{DynamicResource OptionMark.MouseOver.Glyph}"/>
+        </Style>
+        <Style Selector="^:disabled">
+            <Setter Property="Foreground" Value="{DynamicResource ABrush.Foreground.Disabled}"/>
+        </Style>
+        <Style Selector="^:disabled /template/ Border#border">
+            <Setter Property="Background" Value="{DynamicResource OptionMark.Disabled.Background}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource OptionMark.Disabled.Border}"/>
+        </Style>
+        <Style Selector="^:disabled /template/ Path#checkMark">
+            <Setter Property="Stroke" Value="{DynamicResource OptionMark.Disabled.Glyph}"/>
+        </Style>
+        <Style Selector="^:disabled /template/ Rectangle#indeterminateMark">
+            <Setter Property="Fill" Value="{DynamicResource OptionMark.Disabled.Glyph}"/>
+        </Style>
+    </ControlTheme>
+</ResourceDictionary>

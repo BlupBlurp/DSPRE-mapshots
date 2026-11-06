@@ -1,0 +1,60 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="clr-namespace:DSPRE.Avalonia.Controls"
+        xmlns:vm="clr-namespace:DSPRE.Avalonia.ViewModels.Graphics"
+        x:Class="DSPRE.Avalonia.Views.Graphics.CellAnimationPickerView"
+        x:DataType="vm:CellAnimationPickerViewModel"
+        Title="Cell animations"
+        Width="620" Height="620" MinWidth="460" MinHeight="380"
+        WindowStartupLocation="CenterScreen">
+
+  <Design.DataContext>
+    <vm:CellAnimationPickerViewModel/>
+  </Design.DataContext>
+
+  <Window.Styles>
+    <Style Selector="TextBlock.hint">
+      <Setter Property="FontSize" Value="12"/>
+      <Setter Property="Foreground" Value="{DynamicResource Editor.Subtle}"/>
+      <Setter Property="TextWrapping" Value="Wrap"/>
+    </Style>
+  </Window.Styles>
+
+  <DockPanel Margin="10">
+
+    <StackPanel DockPanel.Dock="Bottom" Spacing="6" Margin="0,8,0,0">
+      <DockPanel>
+        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="6">
+          <Button Content="{Binding OpenDeepEditorLabel}" controls:Icon.Key="OpenLink" Click="DeepEditor_Click"
+                  IsVisible="{Binding HasDeepEditor}"/>
+          <Button Content="Open" controls:Icon.Key="OpenLink" Click="Open_Click" MinWidth="90"/>
+        </StackPanel>
+        <TextBlock Text="{Binding StatusText}" Classes="hint" VerticalAlignment="Center"/>
+      </DockPanel>
+    </StackPanel>
+
+    <StackPanel DockPanel.Dock="Top" Spacing="6" Margin="0,0,0,8">
+      <TextBlock Text="{Binding Summary}" Classes="hint"/>
+      <TextBox Text="{Binding Search}" PlaceholderText="Search by archive or file number"/>
+      <CheckBox Content="With art only" IsChecked="{Binding DrawableOnly}"
+                ToolTip.Tip="An animation needs a layout and a sheet of tiles before anything can be shown"/>
+      <CheckBox Content="Include sprites with their own editor" IsChecked="{Binding IncludeSpecialised}"
+                ToolTip.Tip="Trainer and Pokémon sprites are edited in their own editors."/>
+    </StackPanel>
+
+    <ListBox ItemsSource="{Binding Found}" SelectedIndex="{Binding SelectedIndex}"
+             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+             DoubleTapped="List_DoubleTapped">
+      <ListBox.ItemTemplate>
+        <DataTemplate x:DataType="vm:CellAnimationFound">
+          <StackPanel>
+            <TextBlock Text="{Binding Title}" TextWrapping="Wrap"/>
+            <TextBlock Text="{Binding Detail}" FontSize="11" TextWrapping="Wrap"
+                       Foreground="{DynamicResource Editor.Subtle}"/>
+          </StackPanel>
+        </DataTemplate>
+      </ListBox.ItemTemplate>
+    </ListBox>
+
+  </DockPanel>
+</Window>

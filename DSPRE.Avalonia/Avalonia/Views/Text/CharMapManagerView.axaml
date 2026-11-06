@@ -1,0 +1,69 @@
+<Window xmlns="https://github.com/avaloniaui"
+		xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+		xmlns:controls="clr-namespace:DSPRE.Avalonia.Controls"
+		xmlns:vm="clr-namespace:DSPRE.Avalonia.ViewModels.Text"
+		x:Class="DSPRE.Avalonia.Views.Text.CharMapManagerView"
+		x:DataType="vm:CharMapManagerViewModel"
+		Title="Character map manager"
+		Width="680" Height="560" MinWidth="520" MinHeight="420"
+		WindowStartupLocation="CenterOwner">
+  <Design.DataContext>
+    <vm:CharMapManagerViewModel/>
+  </Design.DataContext>
+
+
+  <DockPanel>
+	<controls:EditorToolbar x:Name="MapActions">
+		<Button Content="Save" controls:Icon.Key="saveButton"              IsEnabled="{Binding CanSave}" Click="Save_Click"/>
+		<Button Content="Discard" controls:Icon.Key="resetIcon" Click="Discard_Click" IsEnabled="{Binding HasUnsavedChanges}"/>
+		<Button Content="Create custom map" Click="CreateMap_Click" Margin="12,2,6,2"/>
+		<Button Content="Delete custom map" controls:Icon.Key="deleteIcon" IsEnabled="{Binding HasMap}" Click="DeleteMap_Click"/>
+		<Button Content="Reload" controls:Icon.Key="reload"            Click="Reload_Click"/>
+		<Button Content="Open file" controls:Icon.Key="folder"         IsEnabled="{Binding HasMap}" Click="OpenFile_Click"/>
+		<Button Content="Update from the built-in map" IsEnabled="{Binding HasMap}" Click="Rebase_Click"/>
+	</controls:EditorToolbar>
+
+  <DockPanel Margin="8" LastChildFill="True">
+
+	<Grid ColumnDefinitions="*,8,*" RowDefinitions="Auto,*,Auto,Auto">
+
+	  <TextBlock Grid.Row="0" Grid.Column="0" Text="Character map" FontWeight="Bold" Margin="0,0,0,4"/>
+	  <ListBox   Grid.Row="1" Grid.Column="0"
+				 ItemsSource="{Binding CharMapItems}"
+				 SelectedIndex="{Binding SelectedCharMapIndex}"
+				 DoubleTapped="CharMapList_DoubleTapped"/>
+	  <TextBlock Grid.Row="1" Grid.Column="0" Text="No custom map" Foreground="{DynamicResource Editor.Subtle}"
+				 HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding !HasMap}"/>
+
+	  <!-- Search row under charmap list -->
+	  <DockPanel x:Name="CharSearch" Grid.Row="2" Grid.Column="0" Margin="0,6,0,0" VerticalAlignment="Top">
+		<Button DockPanel.Dock="Right" Content="Search" controls:Icon.Key="lens" Click="Search_Click" Margin="6,0,0,0"/>
+		<TextBox Text="{Binding SearchText}" PlaceholderText="Search letters, or 0x and a code"
+				 KeyDown="Search_KeyDown"/>
+	  </DockPanel>
+
+	  <GridSplitter Grid.Row="0" Grid.RowSpan="4" Grid.Column="1"
+					ResizeDirection="Columns" Width="4"/>
+
+	  <TextBlock Grid.Row="0" Grid.Column="2" Text="Aliases" FontWeight="Bold" Margin="0,0,0,4"/>
+	  <ListBox   Grid.Row="1" Grid.Column="2"
+				 ItemsSource="{Binding AliasItems}"
+				 SelectedIndex="{Binding SelectedAliasIndex}"/>
+
+	  <!-- Right bottom: Add alias controls -->
+	  <StackPanel x:Name="AliasPanel" Grid.Row="2" Grid.Column="2" Margin="0,6,0,0" Spacing="4">
+		<TextBlock Text="Code to alias"/>
+		<ComboBox ItemsSource="{Binding CodeItems}"
+				  SelectedIndex="{Binding SelectedCodeIndex}"
+				  HorizontalAlignment="Stretch"/>
+		<TextBox Text="{Binding NewAliasText}" PlaceholderText="New alias text"/>
+		<StackPanel Orientation="Horizontal" Spacing="6">
+		  <Button Content="Add alias" controls:Icon.Key="addIcon"    IsEnabled="{Binding HasMap}" Click="AddAlias_Click"/>
+		  <Button Content="Remove alias" controls:Icon.Key="deleteIcon" IsEnabled="{Binding HasMap}" Click="RemoveAlias_Click"/>
+		</StackPanel>
+	  </StackPanel>
+
+	</Grid>
+  </DockPanel>
+  </DockPanel>
+</Window>

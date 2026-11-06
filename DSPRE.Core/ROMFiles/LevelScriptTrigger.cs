@@ -1,0 +1,44 @@
+using System;
+
+namespace DSPRE.ROMFiles
+{
+  public class LevelScriptTrigger
+  {
+    public const int VARIABLEVALUE = 1;
+    public const int MAPCHANGE = 2;
+    public const int SCREENRESET = 3;
+    public const int LOADGAME = 4;
+
+    public static bool DisplayInHex { get; set; } = false;
+
+    private static int[] _triggerTypes;
+    public int TriggerType { get; set; }
+    public int ScriptTriggered { get; set; }
+
+    public LevelScriptTrigger(int triggerType, int scriptTriggered)
+    {
+      this.TriggerType = triggerType;
+      this.ScriptTriggered = scriptTriggered;
+    }
+
+    public static bool IsValidTriggerType(byte triggerType)
+    {
+      if (_triggerTypes == null)
+      {
+        _triggerTypes = new[] { VARIABLEVALUE, MAPCHANGE, SCREENRESET, LOADGAME };
+      }
+
+      return Array.IndexOf(_triggerTypes, triggerType) != -1;
+    }
+
+    protected static string FormatValue(int value)
+    {
+      return DisplayInHex ? "0x" + value.ToString("X") : value.ToString();
+    }
+
+    public override string ToString()
+    {
+      return ScriptTriggered == EventFile.NoScript ? "Starts no script" : "Starts script " + ScriptTriggered;
+    }
+  }
+}

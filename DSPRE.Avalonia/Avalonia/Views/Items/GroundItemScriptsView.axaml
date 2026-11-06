@@ -1,0 +1,54 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:DSPRE.Avalonia.ViewModels.Items"
+        x:Class="DSPRE.Avalonia.Views.Items.GroundItemScriptsView"
+        x:DataType="vm:GroundItemScriptsViewModel"
+        xmlns:controls="clr-namespace:DSPRE.Avalonia.Controls"
+        Title="Ground item list"
+        Width="620" Height="560"
+        MinWidth="520" MinHeight="420"
+        WindowStartupLocation="CenterOwner">
+
+  <Design.DataContext>
+    <vm:GroundItemScriptsViewModel/>
+  </Design.DataContext>
+
+  <DockPanel Margin="12">
+    <controls:EditorToolbar>
+        <Button Content="Save" controls:Icon.Key="saveButton" Click="Save_Click" IsEnabled="{Binding HasUnsavedChanges}"/>
+        <Button Content="Discard" controls:Icon.Key="resetIcon" Click="Discard_Click" IsEnabled="{Binding HasUnsavedChanges}"/>
+        <Button Content="Undo" controls:Icon.Key="undo" Click="Undo_Click" IsEnabled="{Binding CanUndo}"/>
+        <Button Content="Redo" controls:Icon.Key="redo" Click="Redo_Click" IsEnabled="{Binding CanRedo}"/>
+        <controls:HelpTip Text="Entries in use can't be removed, and saving renumbers the item events."/>
+    </controls:EditorToolbar>
+
+    <Border DockPanel.Dock="Bottom" Padding="0,10,0,0">
+      <StackPanel Spacing="6">
+        <TextBlock Text="{Binding StatusText}" FontSize="12" Foreground="{DynamicResource Editor.Bad}" TextWrapping="Wrap"/>
+        <StackPanel Orientation="Horizontal" Spacing="6">
+          <controls:FusionAutoCompleteBox ItemsSource="{Binding ItemNames}" SelectedIndex="{Binding NewItemIndex}"
+                    Width="260" HorizontalAlignment="Left"/>
+          <TextBlock Text="Quantity" VerticalAlignment="Center" Margin="8,0,0,0"/>
+          <NumericUpDown Value="{Binding NewQuantity}" Minimum="1" Maximum="99" FormatString="0" Width="90"/>
+          <Button Content="Add" controls:Icon.Key="addIcon" Click="Add_Click" MinWidth="70"/>
+        </StackPanel>
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="6">
+          <Button Content="Change selected" controls:Icon.Key="pencil" Click="Change_Click" IsEnabled="{Binding CanRemove}"/>
+          <Button Content="Remove selected" controls:Icon.Key="deleteIcon" Click="Remove_Click" IsEnabled="{Binding CanRemove}"/>
+          <Button Content="Close" Click="Close_Click" IsCancel="True"/>
+        </StackPanel>
+      </StackPanel>
+    </Border>
+
+    <DataGrid ItemsSource="{Binding Entries}" SelectedItem="{Binding SelectedEntry}"
+              CanUserReorderColumns="False" CanUserResizeColumns="True"
+              IsReadOnly="True" GridLinesVisibility="Horizontal"
+              HorizontalScrollBarVisibility="Auto">
+      <DataGrid.Columns>
+        <DataGridTextColumn Header="Item" Binding="{Binding ItemName}" Width="*"/>
+        <DataGridTextColumn Header="Quantity" Binding="{Binding Quantity}" Width="90"/>
+        <DataGridTextColumn Header="In use" Binding="{Binding InUseText}" Width="70"/>
+      </DataGrid.Columns>
+    </DataGrid>
+  </DockPanel>
+</Window>

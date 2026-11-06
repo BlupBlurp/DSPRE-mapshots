@@ -1,0 +1,63 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="clr-namespace:DSPRE.Avalonia.Controls"
+             xmlns:vm="clr-namespace:DSPRE.Avalonia.ViewModels.Pokemon"
+             x:Class="DSPRE.Avalonia.Views.Pokemon.BugContestEncounterView"
+             x:DataType="vm:BugContestEncounterViewModel">
+  <Design.DataContext>
+    <vm:BugContestEncounterViewModel/>
+  </Design.DataContext>
+
+  <Grid>
+    <TextBlock IsVisible="{Binding IsNotAvailable}" Margin="16" TextWrapping="Wrap"
+               Text="Not in this game"/>
+
+    <DockPanel IsVisible="{Binding IsAvailable}">
+      <controls:EditorToolbar>
+          <Button Content="Save" controls:Icon.Key="saveButton"    Click="Save_Click"   IsEnabled="{Binding HasUnsavedChanges}"/>
+          <Button Content="Discard" controls:Icon.Key="resetIcon" Click="Discard_Click" IsEnabled="{Binding HasUnsavedChanges}"/>
+          <controls:UndoRedoButtons/>
+          <Button Content="Export…" controls:Icon.Key="export" Click="Export_Click"/>
+          <Button Content="Import…" controls:Icon.Key="import" Click="Import_Click"/>
+          <Button Content="Show files" controls:Icon.Key="folder"  Click="Locate_Click"/>
+      </controls:EditorToolbar>
+
+      <DockPanel Margin="8">
+        <StackPanel DockPanel.Dock="Top" Spacing="4" Margin="0,0,0,6">
+          <TextBlock Text="Encounter set" FontWeight="Bold"/>
+          <ComboBox Width="320" HorizontalAlignment="Left" ItemsSource="{Binding SetNames}" SelectedIndex="{Binding SelectedSetIndex}"/>
+          <TextBlock Text="{Binding SetDescription}" Foreground="{DynamicResource Editor.Subtle}" TextWrapping="Wrap"/>
+        </StackPanel>
+        <TextBlock DockPanel.Dock="Bottom" Text="{Binding RateWarning}" Foreground="{DynamicResource Editor.Bad}" TextWrapping="Wrap" FontSize="12" Margin="0,6,0,0"
+                   IsVisible="{Binding RateWarning, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+        <Grid DockPanel.Dock="Top" ColumnDefinitions="40,240,90,90,90,70,90" Margin="12,0,0,4">
+          <TextBlock Grid.Column="1" Text="Pokémon" FontWeight="SemiBold"/>
+          <TextBlock Grid.Column="2" Text="Min level" FontWeight="SemiBold"/>
+          <TextBlock Grid.Column="3" Text="Max level" FontWeight="SemiBold"/>
+          <StackPanel Grid.Column="4" Orientation="Horizontal" Spacing="4">
+            <TextBlock Text="Rate" FontWeight="SemiBold"/>
+            <controls:HelpTip Text="The game rolls 0-99 and takes the first slot whose rate the roll reaches, so rates must go down the list and the last is 0."/>
+          </StackPanel>
+          <TextBlock Grid.Column="5" Text="Chance" FontWeight="SemiBold"/>
+          <TextBlock Grid.Column="6" Text="Score" FontWeight="SemiBold"/>
+        </Grid>
+        <ListBox ItemsSource="{Binding Rows}">
+          <ListBox.ItemTemplate>
+            <DataTemplate x:DataType="vm:BugContestEncounterViewModel+BugRow">
+              <Grid ColumnDefinitions="40,240,90,90,90,70,90">
+                <Image Width="32" Height="32" Source="{Binding Species, Converter={x:Static controls:GameIconConverter.Pokemon}}"/>
+                <controls:FusionAutoCompleteBox Grid.Column="1" controls:EditorLink.To="Pokemon" Margin="0,0,8,0"
+                                                ItemsSource="{Binding SpeciesNames}" SelectedIndex="{Binding SpeciesIndex}"/>
+                <NumericUpDown Grid.Column="2" Minimum="0" Maximum="100" Increment="1" Value="{Binding MinLevel}" Margin="0,0,8,0"/>
+                <NumericUpDown Grid.Column="3" Minimum="0" Maximum="100" Increment="1" Value="{Binding MaxLevel}" Margin="0,0,8,0"/>
+                <NumericUpDown Grid.Column="4" Minimum="0" Maximum="255" Increment="1" Value="{Binding Rate}" Margin="0,0,8,0"/>
+                <TextBlock Grid.Column="5" Text="{Binding Chance}" Foreground="{Binding ChanceBrush}" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                <NumericUpDown Grid.Column="6" Minimum="0" Maximum="255" Increment="1" Value="{Binding Score}"/>
+              </Grid>
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
+      </DockPanel>
+    </DockPanel>
+  </Grid>
+</UserControl>

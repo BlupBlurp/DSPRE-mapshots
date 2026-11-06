@@ -1,0 +1,9 @@
+The control themes and colour dictionaries in this folder reimplement Qt
+Fusion behavior based on qfusionstyle.cpp, qfusionstyle_p_p.h, and the
+qt_fusionPalette implementation.
+
+    Project: Qt Base
+    Source:  https://code.qt.io/cgit/qt/qtbase.git/
+    License: LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only, with a commercial
+             license alternative
+    Copyright (C) 2016 The Qt Company Ltd.

@@ -1,0 +1,31 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:DSPRE.Avalonia.ViewModels.Pokemon"
+             xmlns:views="clr-namespace:DSPRE.Avalonia.Views.Pokemon"
+             xmlns:controls="clr-namespace:DSPRE.Avalonia.Controls"
+             x:Class="DSPRE.Avalonia.Views.Pokemon.SafariZoneEncounterView"
+             x:DataType="vm:SafariZoneEncounterViewModel">
+  <Design.DataContext>
+    <vm:SafariZoneEncounterViewModel/>
+  </Design.DataContext>
+
+  <DockPanel>
+    <controls:EditorToolbar>
+        <TextBlock Text="File" VerticalAlignment="Center"/>
+        <controls:FusionAutoCompleteBox Width="200" ItemsSource="{Binding FileNames}" SelectedIndex="{Binding SelectedFileIndex}"/>
+        <Button Content="Save" controls:Icon.Key="saveButton"     Click="Save_Click"   IsEnabled="{Binding HasUnsavedChanges}"/>
+        <Button Content="Discard" controls:Icon.Key="resetIcon" Click="Discard_Click" IsEnabled="{Binding HasUnsavedChanges}"/>
+        <controls:UndoRedoButtons/>
+        <Button Content="Save as…" controls:Icon.Key="export" Click="SaveAs_Click"/>
+        <Button Content="Import…" controls:Icon.Key="import"  Click="Import_Click"/>
+    </controls:EditorToolbar>
+
+    <TabControl Margin="2">
+      <TabItem Header="Grass">     <views:SafariZoneGroupView DataContext="{Binding GrassVM}"/></TabItem>
+      <TabItem Header="Surf">      <views:SafariZoneGroupView DataContext="{Binding SurfVM}"/></TabItem>
+      <TabItem Header="Old Rod">   <views:SafariZoneGroupView DataContext="{Binding OldRodVM}"/></TabItem>
+      <TabItem Header="Good Rod">  <views:SafariZoneGroupView DataContext="{Binding GoodRodVM}"/></TabItem>
+      <TabItem Header="Super Rod"> <views:SafariZoneGroupView DataContext="{Binding SuperRodVM}"/></TabItem>
+    </TabControl>
+  </DockPanel>
+</UserControl>

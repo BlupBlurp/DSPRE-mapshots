@@ -1,0 +1,66 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="clr-namespace:DSPRE.Avalonia.Controls"
+        xmlns:vm="clr-namespace:DSPRE.Avalonia.ViewModels.Trainers"
+        x:Class="DSPRE.Avalonia.Views.Trainers.AddTrainerClassView"
+        x:DataType="vm:AddTrainerClassViewModel"
+        Title="Add trainer class"
+        Width="380" SizeToContent="Height"
+        MinWidth="340"
+        WindowStartupLocation="CenterOwner">
+
+  <Design.DataContext>
+    <vm:AddTrainerClassViewModel/>
+  </Design.DataContext>
+
+  <DockPanel Margin="12">
+    <StackPanel DockPanel.Dock="Bottom" Spacing="6" Margin="0,10,0,0">
+      <TextBlock Text="{Binding StatusText}" FontSize="12" Foreground="{DynamicResource Editor.Bad}" TextWrapping="Wrap"/>
+      <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="6">
+        <Button Content="Add" controls:Icon.Key="addIcon" Click="Add_Click" IsDefault="True"/>
+        <Button Content="Cancel" Click="Cancel_Click" IsCancel="True"/>
+      </StackPanel>
+    </StackPanel>
+
+    <StackPanel Spacing="4">
+      <TextBlock Text="{Binding Note}"
+                 FontSize="12" TextWrapping="Wrap" Foreground="{DynamicResource Editor.Subtle}"/>
+
+      <TextBlock Text="Class name" FontSize="12" Foreground="{DynamicResource Editor.Subtle}" Margin="0,6,0,0"/>
+      <TextBox Text="{Binding ClassName}"/>
+
+      <TextBlock Text="With article" FontSize="12" Foreground="{DynamicResource Editor.Subtle}" Margin="0,4,0,0"/>
+      <TextBox Text="{Binding NameWithArticle}" PlaceholderText="a Youngster"/>
+
+      <TextBlock Text="Gender" FontSize="12" Foreground="{DynamicResource Editor.Subtle}" Margin="0,4,0,0"
+                 ToolTip.Tip="Affects the natures of the class's Pokémon."/>
+      <ComboBox SelectedIndex="{Binding GenderIndex}" HorizontalAlignment="Stretch">
+        <ComboBoxItem>Male</ComboBoxItem>
+        <ComboBoxItem>Female</ComboBoxItem>
+      </ComboBox>
+
+      <TextBlock Text="Prize money multiplier" FontSize="12" Foreground="{DynamicResource Editor.Subtle}" Margin="0,4,0,0"/>
+      <NumericUpDown Minimum="0" Maximum="255" Increment="1" Value="{Binding PrizeMultiplier}"/>
+
+      <TextBlock Text="Sprite from" FontSize="12" Foreground="{DynamicResource Editor.Subtle}" Margin="0,4,0,0"
+                 ToolTip.Tip="The new class starts with a copy of this class's battle sprite."/>
+      <ComboBox ItemsSource="{Binding SpriteChoices}" SelectedIndex="{Binding SpriteChoiceIndex}"
+                HorizontalAlignment="Stretch" MaxDropDownHeight="320"/>
+
+      <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,8,0,0">
+        <CheckBox Content="Eye-contact music" IsChecked="{Binding AddMusic}" IsEnabled="{Binding CanAddMusic}"
+                  ToolTip.Tip="{Binding MusicHelp}" ToolTip.ShowOnDisabled="True"/>
+        <Button Content="Open in ROM patch toolbox" controls:Icon.Key="OpenLink" Click="OpenMusicPatch_Click"
+                IsVisible="{Binding MusicNeedsPatch}"/>
+      </StackPanel>
+      <StackPanel Spacing="2" IsEnabled="{Binding AddMusic}">
+        <TextBlock Text="Eye-contact music" FontSize="12" Foreground="{DynamicResource Editor.Subtle}"
+                   ToolTip.Tip="Plays when a trainer of this class spots the player."/>
+        <DockPanel>
+          <NumericUpDown DockPanel.Dock="Right" Width="110" Margin="4,0,0,0" Minimum="0" Maximum="65535" Increment="1" Value="{Binding MusicMain}"/>
+          <controls:FusionAutoCompleteBox ItemsSource="{Binding MusicNames.Names}" SelectedIndex="{Binding MusicMainIndex}" PlaceholderText="Unnamed track"/>
+        </DockPanel>
+      </StackPanel>
+    </StackPanel>
+  </DockPanel>
+</Window>

@@ -1,0 +1,92 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace DSPRE
+{
+    /// <summary>The field camera table, found through the same RAM pointers the game follows.</summary>
+    public static class GameCameraTable
+    {
+        public sealed class Location
+        {
+            public string OverlayPath { get; init; }
+            public uint Offset { get; init; }
+
+            /// <summary>Whether every pointer the game keeps to the table points at the same place.</summary>
+            public bool PointersAgree { get; init; }
+        }
+
+        /// <summary>Raised after the table is written, so previews built from it can refresh.</summary>
+        public static event EventHandler Saved;
+
+        public static void RaiseSaved() => Saved?.Invoke(null, EventArgs.Empty);
+
+        public static Location Locate()
+        {
+            RomInfo.PrepareCameraData();
+            string path = OverlayUtils.GetPath(RomInfo.CameraTblOverlayNumber);
+            uint[] pointers = new uint[RomInfo.CameraTblOffsetsToRAMaddress.Length];
+            using (DSUtils.EasyReader br = new DSUtils.EasyReader(path))
+            {
+                for (int i = 0; i < pointers.Length; i++)
+                {
+                    br.BaseStream.Position = RomInfo.CameraTblOffsetsToRAMaddress[i];
+                    pointers[i] = br.ReadUInt32();
+                }
+            }
+
+            return new Location
+            {
+                OverlayPath = path,
+                Offset = pointers[0] - OverlayUtils.OverlayTable.GetRAMAddress(RomInfo.CameraTblOverlayNumber),
+                PointersAgree = pointers.All(p => p == pointers[0]),
+            };
+        }
+
+        public static List<GameCamera> Read(Location at)
+        {
+            bool hgss = RomInfo.GameFamily == RomInfo.GameFamilies.HGSS;
+            List<GameCamera> cameras = new List<GameCamera>(RomInfo.CameraCount);
+            using (DSUtils.EasyReader br = new DSUtils.EasyReader(at.OverlayPath, at.Offset))
+            {
+                for (int i = 0; i < RomInfo.CameraCount; i++)
+                {
+                    cameras.Add(hgss
+                        ? new GameCamera(br.ReadUInt32(), br.ReadInt16(), br.ReadInt16(), br.ReadInt16(),
+                                         br.ReadInt16(), br.ReadByte(), br.ReadByte(),
+                                         br.ReadUInt16(), br.ReadUInt32(), br.ReadUInt32(),
+                                         br.ReadInt32(), br.ReadInt32(), br.ReadInt32())
+                        : new GameCamera(br.ReadUInt32(), br.ReadInt16(), br.ReadInt16(), br.ReadInt16(),
+                                         br.ReadInt16(), br.ReadByte(), br.ReadByte(),
+                                         br.ReadUInt16(), br.ReadUInt32(), br.ReadUInt32()));
+                }
+            }
+            return cameras;
+        }
+
+        /// <summary>Writes the rows one after another at <paramref name="offset"/> in <paramref name="path"/>.</summary>
+        public static void Write(IReadOnlyList<GameCamera> cameras, string path, uint offset)
+        {
+            for (int i = 0; i < cameras.Count; i++)
+                DSUtils.WriteToFile(path, cameras[i].ToByteArray(), (uint)(offset + i * RomInfo.CameraSize));
+        }
+
+        /// <summary>The table as the game has it now, or null when it cannot be read.</summary>
+        public static List<GameCamera> TryRead()
+        {
+            if (string.IsNullOrEmpty(RomInfo.WorkDir)) return null;   // no project open, nothing to read
+            try
+            {
+                // A compressed overlay holds packed bytes, not the table; ds-rom projects keep it unpacked.
+                RomInfo.PrepareCameraData();
+                if (OverlayUtils.IsCompressed(RomInfo.CameraTblOverlayNumber)) return null;
+                return Read(Locate());
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Warn("The camera table couldn't be read: " + ex.Message);
+                return null;
+            }
+        }
+    }
+}

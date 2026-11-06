@@ -1,0 +1,509 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Text;
+using DSPRE.HgEngine;
+
+namespace DSPRE.ROMFiles
+{
+    /// <summary>The common and specialty item marts read by the standard field mart commands.</summary>
+    public sealed class MartData : RomFile
+    {
+        private const string ExpansionMarker = "MARTEXPANDV1";
+        private const int ExpansionHeaderSize = 0x20;
+        private const int MaxCommonItems = 63;
+        /// <summary>The "Mart expansion" toolbox patch lays the marts out with room for this many marts of this many
+        /// items each, so growing them writes in place and never moves a table or rewrites a pointer.</summary>
+        public const int RoomyShops = 64, RoomyItems = 64;
+        private const uint RoomyVersion = 2;
+
+        public sealed class CommonEntry
+        {
+            public ushort ItemId { get; set; }
+            public ushort RequiredTier { get; set; }
+        }
+
+        public sealed class SpecialtyShop
+        {
+            internal SpecialtyShop(int id, string name, List<ushort> items, bool isCustom = false)
+            {
+                Id = id;
+                Name = name;
+                Items = items;
+                OriginalCapacity = items.Count;
+                IsCustom = isCustom;
+            }
+
+            public int Id { get; }
+            public string Name { get; }
+            public List<ushort> Items { get; }
+            internal int OriginalCapacity { get; }
+            public bool IsCustom { get; }
+        }
+
+        private readonly byte[] _arm9;
+        private readonly uint _commonCountOffset;
+        private readonly uint _commonPointerOffset;
+        private readonly uint _specialtyPointerOffset;
+        private readonly int _vanillaSpecialtyShopCount;
+        private readonly int _commonDataOffset;
+        private readonly int[] _specialtyDataOffsets;
+        private readonly int _originalCommonCount;
+        private int _existingExpansionStart = -1;
+        // The arm9 being saved over: the file as it is now, so another editor's arm9 edits since this loaded survive.
+        private byte[] _saveBase;
+        private int _existingExpansionLength;
+        private bool _roomy;
+
+        /// <summary>Whether the marts sit in the layout the toolbox patch makes, with room to grow.</summary>
+        public bool Expanded => _roomy && !FromSource;
+
+        public List<CommonEntry> CommonItems { get; } = new();
+        public List<SpecialtyShop> SpecialtyShops { get; } = new();
+
+        /// <summary>Where a town mart's list starts in arm9, or -1 when it lives elsewhere.</summary>
+        public int SpecialtyOffsetInArm9(int shop) => _specialtyDataOffsets != null && shop >= 0 && shop < _specialtyDataOffsets.Length ? _specialtyDataOffsets[shop] : -1;
+        public bool ExpansionAvailable { get; }
+        /// <summary>hg-engine with MART_EXPANSION: the marts are src/field/mart.c, lists of any length in fixed slots.</summary>
+        public bool FromSource { get; }
+        public int CommonItemLimit => FromSource ? HgEngine.HgEngineMarts.BadgeMartLimit : MaxCommonItems;
+        /// <summary>Vanilla stock tiers run 0-6; hg-engine's badge mart counts badges, Kanto's too.</summary>
+        public int MaxTier => FromSource ? 16 : 6;
+        public bool CanAddShops => Expanded && SpecialtyShops.Count < RoomyShops;
+        public bool HasSizeChanges => CommonItems.Count != _originalCommonCount
+            || SpecialtyShops.Count != _specialtyDataOffsets.Length
+            || SpecialtyShops.Where((shop, i) => i < _specialtyDataOffsets.Length)
+                .Any(shop => shop.Items.Count != shop.OriginalCapacity);
+
+        public static MartData LoadCurrent()
+        {
+            if (HgEngine.HgEngineMarts.Enabled) return LoadSource();
+            if (!RomInfo.IsMartEditorAvailable())
+                throw new InvalidOperationException("The Mart editor isn't available for this ROM.");
+
+            if (!ARM9.DecompressIfMarked())
+                throw new InvalidOperationException("The ARM9 couldn't be decompressed.");
+
+            DSUtils.TryUnpackNarcs(new List<RomInfo.DirNames> { RomInfo.DirNames.SynthOverlay });
+            bool expanded = (RomPatchState.FlagArm9Expanded || PatchToolboxLogic.CheckFilesArm9ExpansionApplied())
+                && File.Exists(Filesystem.ExpArmPath)
+                && new FileInfo(Filesystem.ExpArmPath).Length >= 0x16000;
+
+            return new MartData(
+                File.ReadAllBytes(RomInfo.Arm9Path), expanded ? File.ReadAllBytes(Filesystem.ExpArmPath) : null,
+                RomInfo.MartCommonCountOffset,
+                RomInfo.MartCommonPointerOffset,
+                RomInfo.MartSpecialtyPointerOffset,
+                RomInfo.MartSpecialtyShopCount,
+                MartShopNames.ForFamily(RomInfo.GameFamily), expanded);
+        }
+
+        internal MartData(byte[] arm9, uint commonCountOffset, uint commonPointerOffset,
+            uint specialtyPointerOffset, int specialtyShopCount, IReadOnlyList<string> specialtyNames)
+            : this(arm9, null, commonCountOffset, commonPointerOffset, specialtyPointerOffset,
+                specialtyShopCount, specialtyNames, false)
+        {
+        }
+
+        internal MartData(byte[] arm9, byte[] syntheticOverlay, uint commonCountOffset, uint commonPointerOffset,
+            uint specialtyPointerOffset, int specialtyShopCount, IReadOnlyList<string> specialtyNames,
+            bool expansionAvailable)
+        {
+            _arm9 = arm9 != null ? (byte[])arm9.Clone() : throw new ArgumentNullException(nameof(arm9));
+            syntheticOverlay = syntheticOverlay != null ? (byte[])syntheticOverlay.Clone() : null;
+            _commonCountOffset = commonCountOffset;
+            _commonPointerOffset = commonPointerOffset;
+            _specialtyPointerOffset = specialtyPointerOffset;
+            _vanillaSpecialtyShopCount = specialtyShopCount;
+            ExpansionAvailable = expansionAvailable;
+            if (specialtyShopCount <= 0)
+                throw new InvalidOperationException("The mart layout has no specialty shops.");
+            if (specialtyNames == null || specialtyNames.Count != specialtyShopCount)
+                throw new InvalidOperationException("The mart shop-name table doesn't match the ROM layout.");
+
+            EnsureRange(_arm9, commonCountOffset, 1, "common mart count");
+            _originalCommonCount = _arm9[commonCountOffset];
+            if (_originalCommonCount <= 0)
+                throw new InvalidOperationException("The common mart table is empty.");
+
+            DataLocation commonLocation = ReadPointer(_arm9, _arm9, syntheticOverlay, commonPointerOffset,
+                checked(_originalCommonCount * 4), "common mart table");
+            _commonDataOffset = commonLocation.IsArm9 ? commonLocation.Offset : -1;
+            for (int i = 0; i < _originalCommonCount; i++)
+            {
+                int offset = commonLocation.Offset + i * 4;
+                CommonItems.Add(new CommonEntry
+                {
+                    ItemId = BitConverter.ToUInt16(commonLocation.Data, offset),
+                    RequiredTier = BitConverter.ToUInt16(commonLocation.Data, offset + 2),
+                });
+            }
+
+            int actualSpecialtyCount = TryReadExpansionCount(commonLocation, specialtyShopCount);
+            DataLocation pointerTable = ReadPointer(_arm9, _arm9, syntheticOverlay, specialtyPointerOffset,
+                checked(actualSpecialtyCount * 4), "specialty mart pointer table");
+            _specialtyDataOffsets = new int[actualSpecialtyCount];
+            for (int i = 0; i < actualSpecialtyCount; i++)
+            {
+                DataLocation list = ReadPointer(pointerTable.Data, _arm9, syntheticOverlay,
+                    checked((uint)(pointerTable.Offset + i * 4)), 2, $"specialty mart {i}");
+                _specialtyDataOffsets[i] = list.IsArm9 ? list.Offset : -1;
+
+                List<ushort> items = new List<ushort>();
+                for (int offset = list.Offset; ; offset += 2)
+                {
+                    EnsureRange(list.Data, (uint)offset, 2, $"specialty mart {i}");
+                    ushort item = BitConverter.ToUInt16(list.Data, offset);
+                    if (item == ushort.MaxValue) break;
+                    items.Add(item);
+                }
+                string name = i < specialtyNames.Count ? specialtyNames[i] : $"Custom mart {i}";
+                SpecialtyShops.Add(new SpecialtyShop(i, name, items, i >= specialtyShopCount));
+            }
+        }
+
+        private MartData(List<CommonEntry> common, List<SpecialtyShop> shops)
+        {
+            _arm9 = Array.Empty<byte>();
+            FromSource = ExpansionAvailable = true;
+            CommonItems.AddRange(common);
+            SpecialtyShops.AddRange(shops);
+            _originalCommonCount = common.Count;
+            _vanillaSpecialtyShopCount = shops.Count;
+            _specialtyDataOffsets = new int[shops.Count];
+        }
+
+        private static MartData LoadSource()
+        {
+            if (!HgEngine.HgEngineMarts.TryRead(out List<(int Item, int Badges)> badgeMart, out List<HgEngineMarts.Specialty> specialty, out string error)) throw new InvalidOperationException(error);
+            IReadOnlyList<string> names = MartShopNames.ForFamily(RomInfo.GameFamily);
+            List<CommonEntry> common = badgeMart.Select(r => new CommonEntry { ItemId = (ushort)r.Item, RequiredTier = (ushort)r.Badges }).ToList();
+            List<SpecialtyShop> shops = specialty.Select((s, i) => new SpecialtyShop(i, names != null && names.Count == specialty.Count ? names[i] : s.Array,
+                s.Items.Select(x => (ushort)x).ToList())).ToList();
+            return new MartData(common, shops);
+        }
+
+        public SpecialtyShop AddSpecialtyShop()
+        {
+            if (FromSource)
+                throw new InvalidOperationException("hg-engine puts its marts in the game's own slots, so no mart can be added.");
+            if (!Expanded)
+                throw new InvalidOperationException("Adding a mart needs the \"Mart expansion\" patch from the ROM patch toolbox.");
+            if (SpecialtyShops.Count >= RoomyShops)
+                throw new InvalidOperationException($"The marts have room for {RoomyShops} marts.");
+            int id = SpecialtyShops.Count;
+            SpecialtyShop shop = new SpecialtyShop(id, $"Custom mart {id}", new List<ushort> { 1 }, true);
+            SpecialtyShops.Add(shop);
+            return shop;
+        }
+
+        public void RemoveLastSpecialtyShop()
+        {
+            if (SpecialtyShops.Count <= _vanillaSpecialtyShopCount)
+                throw new InvalidOperationException("Only custom marts appended by DSPRE can be removed.");
+            SpecialtyShops.RemoveAt(SpecialtyShops.Count - 1);
+        }
+
+        public bool SaveCurrent()
+        {
+            if (FromSource)
+            {
+                ValidateInventories();
+                if (!HgEngine.HgEngineMarts.TryWrite(CommonItems.Select(c => ((int)c.ItemId, (int)c.RequiredTier)).ToList(),
+                        SpecialtyShops.Select(s => (IReadOnlyList<int>)s.Items.Select(x => (int)x).ToList()).ToList(), out string error))
+                    throw new IOException(error);
+                return true;
+            }
+            if (!HasSizeChanges && _commonDataOffset >= 0 && _specialtyDataOffsets.All(offset => offset >= 0))
+            {
+                _saveBase = Arm9AsItIsNow();
+                try { return SaveToFile(RomInfo.Arm9Path, showSuccessMessage: false); }
+                finally { _saveBase = null; }
+            }
+            if (Expanded)
+            {
+                // The layout already has room: the marts go back where they are and only the common count changes.
+                byte[] overlay = File.ReadAllBytes(Filesystem.ExpArmPath), overlayBefore = (byte[])overlay.Clone();
+                _saveBase = Arm9AsItIsNow();
+                byte[] arm9Now;
+                try
+                {
+                    byte[] block = BuildRoomyBlock(RomInfo.SynthOverlayLoadAddress, _existingExpansionStart, out int commonAt, out int pointersAt);
+                    Array.Clear(overlay, _existingExpansionStart, _existingExpansionLength);
+                    block.CopyTo(overlay, _existingExpansionStart);
+                    arm9Now = (byte[])_saveBase.Clone();
+                    arm9Now[_commonCountOffset] = (byte)CommonItems.Count;
+                }
+                finally { _saveBase = null; }
+                WriteReplacementFile(Filesystem.ExpArmPath, overlay);
+                try { WriteReplacementFile(RomInfo.Arm9Path, arm9Now); }
+                catch { WriteReplacementFile(Filesystem.ExpArmPath, overlayBefore); throw; }
+                return true;
+            }
+            throw new InvalidOperationException("Changing mart sizes needs the \"Mart expansion\" patch from the ROM patch toolbox.");
+        }
+
+        public static int RoomyLength => RoomyPointersAt + RoomyShops * 4 + RoomyShops * (RoomyItems + 1) * 2;
+        private static int RoomyPointersAt => Align(ExpansionHeaderSize + MaxCommonItems * 4, 4);
+
+        /// <summary>The marts laid out with room for <see cref="RoomyShops"/> marts of <see cref="RoomyItems"/> items,
+        /// every mart's pointer already in place, for a block at <paramref name="blockOffset"/>.</summary>
+        private byte[] BuildRoomyBlock(uint loadAddress, int blockOffset, out int commonAt, out int pointersAt)
+        {
+            ValidateInventories();
+            if (SpecialtyShops.Count > RoomyShops) throw new InvalidOperationException($"The marts have room for {RoomyShops} marts.");
+            if (SpecialtyShops.FirstOrDefault(shop => shop.Items.Count > RoomyItems) is SpecialtyShop full)
+                throw new InvalidOperationException($"{full.Name} has room for {RoomyItems} items.");
+            commonAt = ExpansionHeaderSize;
+            pointersAt = RoomyPointersAt;
+            int slotsAt = pointersAt + RoomyShops * 4;
+            byte[] block = new byte[RoomyLength];
+            Encoding.ASCII.GetBytes(ExpansionMarker).CopyTo(block, 0);
+            WriteUInt32(block, 0x0C, RoomyVersion);
+            WriteUInt32(block, 0x10, (uint)block.Length);
+            WriteUInt32(block, 0x14, (uint)SpecialtyShops.Count);
+            WriteUInt32(block, 0x18, (uint)CommonItems.Count);
+            for (int i = 0; i < CommonItems.Count; i++)
+            {
+                WriteUInt16(block, commonAt + i * 4, CommonItems[i].ItemId);
+                WriteUInt16(block, commonAt + i * 4 + 2, CommonItems[i].RequiredTier);
+            }
+            for (int i = 0; i < RoomyShops; i++)
+            {
+                int slot = slotsAt + i * (RoomyItems + 1) * 2;
+                WriteUInt32(block, pointersAt + i * 4, checked(loadAddress + (uint)blockOffset + (uint)slot));
+                List<ushort> items = i < SpecialtyShops.Count ? SpecialtyShops[i].Items : new List<ushort>();
+                for (int j = 0; j < items.Count; j++) WriteUInt16(block, slot + j * 2, items[j]);
+                WriteUInt16(block, slot + items.Count * 2, ushort.MaxValue);
+            }
+            return block;
+        }
+
+        /// <summary>
+        /// Moves the marts, as saved, into the layout with room for <see cref="RoomyShops"/> marts of <see cref="RoomyItems"/>
+        /// items and points the ARM9 at it. The toolbox patch calls this; the editor never moves the marts itself.
+        /// </summary>
+        public void MoveToRoomyLayout()
+        {
+            if (FromSource || Expanded) return;
+            if (!SyntheticOverlaySpace.Available()) throw new InvalidOperationException("Apply the ARM9 expansion in the ROM patch toolbox first.");
+            byte[] overlay = File.ReadAllBytes(Filesystem.ExpArmPath), overlayBefore = (byte[])overlay.Clone();
+            List<(long Start, long End)> excluded = SyntheticOverlaySpace.Reserved(overlay);
+            // An older, tightly packed mart block is freed for the new one.
+            if (_existingExpansionStart >= 0)
+            {
+                excluded.RemoveAll(r => r.Start == _existingExpansionStart);
+                Array.Clear(overlay, _existingExpansionStart, _existingExpansionLength);
+            }
+            int at = SyntheticOverlaySpace.Place(overlay, RoomyLength, excluded);
+            if (at < 0) throw new InvalidOperationException("No free space was found in the expanded ARM9 area for the marts.");
+            _saveBase = Arm9AsItIsNow();
+            byte[] arm9Now;
+            try
+            {
+                byte[] block = BuildRoomyBlock(RomInfo.SynthOverlayLoadAddress, at, out int commonAt, out int pointersAt);
+                block.CopyTo(overlay, at);
+                arm9Now = (byte[])_saveBase.Clone();
+                arm9Now[_commonCountOffset] = (byte)CommonItems.Count;
+                WriteUInt32(arm9Now, checked((int)_commonPointerOffset), checked(RomInfo.SynthOverlayLoadAddress + (uint)at + (uint)commonAt));
+                WriteUInt32(arm9Now, checked((int)_specialtyPointerOffset), checked(RomInfo.SynthOverlayLoadAddress + (uint)at + (uint)pointersAt));
+            }
+            finally { _saveBase = null; }
+            WriteReplacementFile(Filesystem.ExpArmPath, overlay);
+            try { WriteReplacementFile(RomInfo.Arm9Path, arm9Now); }
+            catch { WriteReplacementFile(Filesystem.ExpArmPath, overlayBefore); throw; }
+            _existingExpansionStart = at;
+            _existingExpansionLength = RoomyLength;
+            _roomy = true;
+        }
+
+        /// <summary>
+        /// The arm9 on disk, refused when the mart count or pointers changed since loading, because the game would no
+        /// longer read these tables.
+        /// </summary>
+        private byte[] Arm9AsItIsNow()
+        {
+            byte[] now = File.ReadAllBytes(RomInfo.Arm9Path);
+            bool same = now.Length == _arm9.Length
+                && now[_commonCountOffset] == _arm9[_commonCountOffset]
+                && now.AsSpan((int)_commonPointerOffset, 4).SequenceEqual(_arm9.AsSpan((int)_commonPointerOffset, 4))
+                && now.AsSpan((int)_specialtyPointerOffset, 4).SequenceEqual(_arm9.AsSpan((int)_specialtyPointerOffset, 4));
+            if (!same)
+                throw new InvalidOperationException("The marts changed in another editor since this window opened. Close it and open it again.");
+            return now;
+        }
+
+        public override byte[] ToByteArray()
+        {
+            ValidateInventories();
+            if (CommonItems.Count != _originalCommonCount)
+                throw new InvalidOperationException("Changing the common mart table size isn't supported yet.");
+
+            byte[] result = (byte[])(_saveBase ?? _arm9).Clone();
+            for (int i = 0; i < CommonItems.Count; i++)
+            {
+                CommonEntry entry = CommonItems[i];
+                WriteUInt16(result, _commonDataOffset + i * 4, entry.ItemId);
+                WriteUInt16(result, _commonDataOffset + i * 4 + 2, entry.RequiredTier);
+            }
+
+            for (int shopIndex = 0; shopIndex < SpecialtyShops.Count; shopIndex++)
+            {
+                SpecialtyShop shop = SpecialtyShops[shopIndex];
+                if (shop.Items.Count != shop.OriginalCapacity)
+                    throw new InvalidOperationException(
+                        $"Changing the size of {shop.Name} isn't supported yet.");
+
+                int offset = _specialtyDataOffsets[shopIndex];
+                for (int itemIndex = 0; itemIndex < shop.Items.Count; itemIndex++)
+                {
+                    ushort item = shop.Items[itemIndex];
+                    WriteUInt16(result, offset + itemIndex * 2, item);
+                }
+                WriteUInt16(result, offset + shop.Items.Count * 2, ushort.MaxValue);
+            }
+
+            return result;
+        }
+
+        private void ValidateInventories()
+        {
+            if (CommonItems.Count < 1 || CommonItems.Count > CommonItemLimit)
+                throw new InvalidOperationException($"The common mart must contain between 1 and {CommonItemLimit} items.");
+            if (SpecialtyShops.Count < _vanillaSpecialtyShopCount)
+                throw new InvalidOperationException("Vanilla specialty marts can't be removed.");
+            foreach (CommonEntry entry in CommonItems)
+            {
+                if (entry.ItemId == 0 || entry.ItemId == ushort.MaxValue)
+                    throw new InvalidOperationException("Mart item IDs must be between 1 and 0xFFFE.");
+                if (entry.RequiredTier > MaxTier)
+                    throw new InvalidOperationException(FromSource ? "Badge mart items need between 0 and 16 badges." : "Common mart stock tiers must be between 0 and 6.");
+            }
+            foreach (SpecialtyShop shop in SpecialtyShops)
+            {
+                if (shop.Items.Count < 1)
+                    throw new InvalidOperationException($"{shop.Name} must contain at least one item.");
+                if (shop.Items.Any(item => item == 0 || item == ushort.MaxValue))
+                    throw new InvalidOperationException("Mart item IDs must be between 1 and 0xFFFE.");
+            }
+        }
+
+        private int TryReadExpansionCount(DataLocation commonLocation, int fallback)
+        {
+            if (commonLocation.IsArm9 || commonLocation.Offset < ExpansionHeaderSize) return fallback;
+            int header = commonLocation.Offset - ExpansionHeaderSize;
+            if (!HasMarker(commonLocation.Data, header)) return fallback;
+            EnsureRange(commonLocation.Data, (uint)header, ExpansionHeaderSize, "expanded mart header");
+            uint version = BitConverter.ToUInt32(commonLocation.Data, header + 0x0C);
+            uint storedLength = BitConverter.ToUInt32(commonLocation.Data, header + 0x10);
+            uint storedCommonCount = BitConverter.ToUInt32(commonLocation.Data, header + 0x18);
+            uint storedSpecialtyCount = BitConverter.ToUInt32(commonLocation.Data, header + 0x14);
+            if ((version != 1 && version != RoomyVersion) || storedLength < ExpansionHeaderSize
+                || (long)header + storedLength > commonLocation.Data.Length
+                || storedCommonCount != _originalCommonCount
+                || storedSpecialtyCount < fallback || storedSpecialtyCount > int.MaxValue)
+                throw new InvalidOperationException("The expanded mart metadata is invalid.");
+            _existingExpansionStart = header;
+            _existingExpansionLength = (int)storedLength;
+            _roomy = version == RoomyVersion && storedLength >= RoomyLength;
+            return (int)storedSpecialtyCount;
+        }
+
+        private static DataLocation ReadPointer(byte[] pointerData, byte[] arm9, byte[] syntheticOverlay,
+            uint pointerOffset, int requiredLength, string label)
+        {
+            EnsureRange(pointerData, pointerOffset, 4, label + " pointer");
+            uint address = BitConverter.ToUInt32(pointerData, checked((int)pointerOffset));
+            (int region, int offset) = RamAddress.Find(address, requiredLength,
+                RamAddress.Synthetic(syntheticOverlay?.Length ?? 0), RamAddress.Arm9(arm9.Length));
+            if (region == 0) return new DataLocation(syntheticOverlay, offset, false);
+            if (region == 1) return new DataLocation(arm9, offset, true);
+            throw new InvalidOperationException($"The {label} points somewhere DSPRE can't read.");
+        }
+
+        private readonly struct DataLocation
+        {
+            public DataLocation(byte[] data, int offset, bool isArm9) { Data = data; Offset = offset; IsArm9 = isArm9; }
+            public byte[] Data { get; }
+            public int Offset { get; }
+            public bool IsArm9 { get; }
+        }
+
+        private static bool HasMarker(byte[] data, int offset)
+        {
+            byte[] marker = Encoding.ASCII.GetBytes(ExpansionMarker);
+            return offset >= 0 && offset + marker.Length <= data.Length
+                && marker.SequenceEqual(data.Skip(offset).Take(marker.Length));
+        }
+
+        private static int Align(int value, int alignment) => (value + alignment - 1) & ~(alignment - 1);
+
+        private static void WriteReplacementFile(string path, byte[] data) => DSUtils.WriteWholeFile(path, data);
+
+        private static void EnsureRange(byte[] data, uint offset, int length, string label)
+        {
+            if ((ulong)offset + (ulong)length > (ulong)data.Length)
+                throw new InvalidOperationException($"The {label} is outside its data file.");
+        }
+
+        private static void WriteUInt16(byte[] data, int offset, ushort value)
+        {
+            data[offset] = (byte)value;
+            data[offset + 1] = (byte)(value >> 8);
+        }
+
+        private static void WriteUInt32(byte[] data, int offset, uint value)
+        {
+            data[offset] = (byte)value;
+            data[offset + 1] = (byte)(value >> 8);
+            data[offset + 2] = (byte)(value >> 16);
+            data[offset + 3] = (byte)(value >> 24);
+        }
+    }
+
+    internal static class MartShopNames
+    {
+        private static readonly string[] Dp =
+        {
+            "Jubilife Secondary", "Oreburgh Secondary", "Floaroma Secondary",
+            "Eterna Secondary", "Eterna Herbs", "Hearthome Secondary",
+            "Solaceon Secondary", "Pastoria Secondary",
+            "Veilstone Department Store 1F (Right)", "Veilstone Department Store 1F (Left)",
+            "Veilstone Department Store 2F (Top)", "Veilstone Department Store 2F (Middle)",
+            "Veilstone Department Store 3F (Top)", "Veilstone Department Store 3F (Bottom)",
+            "Celestic Secondary", "Snowpoint Secondary", "Canalave Secondary",
+            "Sunyshore Secondary", "Pokémon League Secondary",
+        };
+
+        private static readonly string[] Hgss =
+        {
+            "Cherrygrove Secondary", "Violet Secondary", "Azalea Secondary",
+            "Goldenrod Department Store 2F (Lower)", "Goldenrod Department Store 2F (Upper)",
+            "Goldenrod Department Store 3F", "Goldenrod Department Store 4F",
+            "Goldenrod Department Store 5F", "Goldenrod Herb Shop", "Ecruteak Secondary",
+            "Olivine Secondary", "Cianwood Pharmacy", "Blackthorn Secondary", "Pokémon League Secondary",
+            "Vermilion Secondary", "Saffron Secondary", "Lavender Secondary",
+            "Cerulean Secondary", "Celadon Department Store 2F (Left)",
+            "Celadon Department Store 2F (Right)", "Celadon Department Store 3F",
+            "Celadon Department Store 4F", "Celadon Department Store 5F (Left)",
+            "Celadon Department Store 5F (Right)", "Fuchsia Secondary", "Pewter Secondary",
+            "Viridian Secondary", "Mt. Moon Square", "Mahogany Before Hideout",
+            "Mahogany After Hideout",
+        };
+
+        public static IReadOnlyList<string> ForFamily(RomInfo.GameFamilies family)
+        {
+            if (family == RomInfo.GameFamilies.DP) return Dp;
+            if (family == RomInfo.GameFamilies.Plat)
+            {
+                string[] names = new string[Dp.Length + 1];
+                Array.Copy(Dp, names, Dp.Length);
+                names[^1] = "Veilstone Department Store B1F Berries";
+                return names;
+            }
+            if (family == RomInfo.GameFamilies.HGSS) return Hgss;
+            throw new InvalidOperationException("DSPRE doesn't know this game's mart layout.");
+        }
+    }
+}

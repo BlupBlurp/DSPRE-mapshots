@@ -1,0 +1,318 @@
+﻿using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using static DSPRE.RomInfo;
+
+namespace DSPRE.ROMFiles
+{
+    /// <summary>The animations a building model plays. </summary>
+    public static class BuildingAnimationSet
+    {
+        private static readonly Dictionary<(bool indoor, int model), BuildingAnimationInfo> InfoCache
+            = new Dictionary<(bool, int), BuildingAnimationInfo>();
+        private static readonly Dictionary<int, TextureSrtAnimation> ScrollCache
+            = new Dictionary<int, TextureSrtAnimation>();
+        private static readonly Dictionary<int, TexturePatternAnimation> PatternCache
+            = new Dictionary<int, TexturePatternAnimation>();
+        private static readonly Dictionary<int, MaterialColourAnimation> FadeCache = new Dictionary<int, MaterialColourAnimation>();
+        private static readonly Dictionary<int, JointAnimation> JointCache = new Dictionary<int, JointAnimation>();
+        private static readonly Dictionary<int, byte[]> RawCache = new Dictionary<int, byte[]>();
+        private static string _cacheDir;
+
+        public static bool Available =>
+            GameDirs != null
+            && GameDirs.ContainsKey(DirNames.BuildingAnimations)
+            && GameDirs.ContainsKey(DirNames.BuildingAnimListOut);
+
+        /// <summary>The list entry for one building model, or null when it has none.</summary>
+        public static BuildingAnimationInfo InfoFor(int modelId, bool indoor)
+        {
+            if (!Available || modelId < 0) return null;
+            Refresh();
+            (bool indoor, int modelId) key = (indoor, modelId);
+            if (InfoCache.TryGetValue(key, out BuildingAnimationInfo hit)) return hit;
+
+            BuildingAnimationInfo info = null;
+            try
+            {
+                DirNames list = indoor && GameDirs.ContainsKey(DirNames.BuildingAnimListIn)
+                    ? DirNames.BuildingAnimListIn : DirNames.BuildingAnimListOut;
+                DSUtils.TryUnpackNarcs(new List<DirNames> { list });
+                string path = Path.Combine(GameDirs[list].unpackedDir, modelId.ToString("D4"));
+                if (File.Exists(path))
+                {
+                    byte[] b = File.ReadAllBytes(path);
+                    // Diamond, Pearl and Platinum write a shorter record than HeartGold does; both are read.
+                    if (b.Length >= BuildingAnimationInfo.ShortSize) info = new BuildingAnimationInfo(b);
+                }
+            }
+            catch (Exception ex) { AppLogger.Error($"Building animation list entry {modelId} failed: {ex.Message}"); }
+
+            InfoCache[key] = info;
+            return info;
+        }
+
+        private static readonly Dictionary<int, List<TextureSrtAnimation>> ExtraScrolling
+            = new Dictionary<int, List<TextureSrtAnimation>>();
+        private static readonly Dictionary<int, List<JointAnimation>> ExtraJoints
+            = new Dictionary<int, List<JointAnimation>>();
+
+        public abstract class WholeModelMotion
+        {
+            public abstract (float x, float y, float z) At(int frame);
+        }
+
+        public sealed class CombinedMotion : WholeModelMotion
+        {
+            private readonly WholeModelMotion[] _parts;
+            public CombinedMotion(params WholeModelMotion[] parts) => _parts = parts ?? Array.Empty<WholeModelMotion>();
+
+            public override (float x, float y, float z) At(int frame)
+            {
+                float x = 0, y = 0, z = 0;
+                foreach (WholeModelMotion part in _parts)
+                {
+                    if (part == null) continue;
+                    (float px, float py, float pz) = part.At(frame);
+                    x += px; y += py; z += pz;
+                }
+                return (x, y, z);
+            }
+        }
+
+        public sealed class HoverAnimation : WholeModelMotion
+        {
+            public HoverAnimation(IReadOnlyList<float> offsets, float step)
+            {
+                Offsets = offsets;
+                Step = step > 0 ? step : 1f;
+            }
+
+            public IReadOnlyList<float> Offsets { get; }
+            public float Step { get; }
+
+            public override (float x, float y, float z) At(int frame)
+            {
+                if (Offsets == null || Offsets.Count == 0) return (0f, 0f, 0f);
+
+                int steps = Math.Max(1, (int)Math.Round(Offsets.Count / Step));
+                int t = ((frame % (steps * 2)) + steps * 2) % (steps * 2);
+                float progress = (t < steps ? t : steps * 2 - t) * Step;
+
+                int at = Math.Min((int)progress, Offsets.Count - 1);
+                int next = Math.Min(at + 1, Offsets.Count - 1);
+                float across = progress - at;
+
+                return (0f, Offsets[at] + (Offsets[next] - Offsets[at]) * across, 0f);
+            }
+        }
+
+        private static readonly Dictionary<int, WholeModelMotion> ExtraMotion = new Dictionary<int, WholeModelMotion>();
+
+        public static WholeModelMotion MotionFor(int modelId)
+            => ExtraMotion.TryGetValue(modelId, out WholeModelMotion motion) ? motion : null;
+
+        public static void Register(int modelId, TextureSrtAnimation scrolling = null, JointAnimation joint = null,
+            WholeModelMotion motion = null)
+        {
+            if (motion != null) ExtraMotion[modelId] = motion;
+            if (scrolling != null)
+            {
+                if (!ExtraScrolling.TryGetValue(modelId, out List<TextureSrtAnimation> list)) ExtraScrolling[modelId] = list = new List<TextureSrtAnimation>();
+                if (!list.Contains(scrolling)) list.Add(scrolling);
+            }
+            if (joint != null && joint.Moves)
+            {
+                if (!ExtraJoints.TryGetValue(modelId, out List<JointAnimation> list)) ExtraJoints[modelId] = list = new List<JointAnimation>();
+                if (!list.Contains(joint)) list.Add(joint);
+            }
+        }
+
+        public static void ForgetRegistered() { ExtraScrolling.Clear(); ExtraJoints.Clear(); ExtraMotion.Clear(); }
+
+        /// <summary>The texture-scrolling animations a building model plays. </summary>
+        public static IReadOnlyList<TextureSrtAnimation> ScrollingFor(int modelId, bool indoor, FieldTimeZone? timeOfDay = null)
+        {
+            List<TextureSrtAnimation> result = new List<TextureSrtAnimation>();
+            if (ExtraScrolling.TryGetValue(modelId, out List<TextureSrtAnimation> registered)) result.AddRange(registered);
+            foreach (int code in CodesToPlay(modelId, indoor, timeOfDay))
+            {
+                TextureSrtAnimation anim = LoadScrolling(code);
+                if (anim != null) result.Add(anim);
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// The texture-swapping animations a building model plays, such as flashing signs.
+        /// </summary>
+        public static IReadOnlyList<TexturePatternAnimation> PatternsFor(int modelId, bool indoor, FieldTimeZone? timeOfDay = null)
+        {
+            List<TexturePatternAnimation> result = new List<TexturePatternAnimation>();
+            foreach (int code in CodesToPlay(modelId, indoor, timeOfDay))
+            {
+                TexturePatternAnimation anim = LoadPattern(code);
+                if (anim != null) result.Add(anim);
+            }
+            return result;
+        }
+
+        /// <summary>The animations that move a building model's separate parts about.</summary>
+        public static IReadOnlyList<JointAnimation> JointsFor(int modelId, bool indoor, FieldTimeZone? timeOfDay = null)
+        {
+            List<JointAnimation> result = new List<JointAnimation>();
+            if (ExtraJoints.TryGetValue(modelId, out List<JointAnimation> registered)) result.AddRange(registered);
+            foreach (int code in CodesToPlay(modelId, indoor, timeOfDay))
+            {
+                JointAnimation anim = LoadJoint(code);
+                if (anim != null && anim.Moves) result.Add(anim);
+            }
+            return result;
+        }
+
+        /// <summary>Which of a model's animation slots actually run. </summary>
+        public static IEnumerable<int> CodesToPlay(int modelId, bool indoor, FieldTimeZone? timeOfDay)
+        {
+            BuildingAnimationInfo info = InfoFor(modelId, indoor);
+            if (info == null || !info.Animates) yield break;
+
+            if (info.IsTimeOfDay)
+            {
+                if (timeOfDay == null) yield break;      // no clock given, so nothing to choose with
+                int slot = FieldTimeOfDay.AnimationIndexForZone(timeOfDay.Value);
+                if (slot < 0 || slot >= BuildingAnimationInfo.MaxAnimations) yield break;
+
+                int code = info.Codes[slot];
+                if (unchecked((uint)code) != BuildingAnimationInfo.NoAnimation) yield return code;
+                yield break;
+            }
+
+            // A door, or anything else that waits to be set off, stays still until it is.
+            if (!info.PlaysUnprompted) yield break;
+            foreach (int code in info.UsedCodes) yield return code;
+        }
+
+        /// <summary>The animations that fade a building model's materials in and out.</summary>
+        public static IReadOnlyList<MaterialColourAnimation> FadesFor(int modelId, bool indoor, FieldTimeZone? timeOfDay = null)
+        {
+            List<MaterialColourAnimation> result = new List<MaterialColourAnimation>();
+            foreach (int code in CodesToPlay(modelId, indoor, timeOfDay))
+            {
+                MaterialColourAnimation anim = LoadFade(code);
+                if (anim != null && anim.Fades) result.Add(anim);
+            }
+            return result;
+        }
+
+        private static MaterialColourAnimation LoadFade(int code)
+        {
+            if (FadeCache.TryGetValue(code, out MaterialColourAnimation hit)) return hit;
+            MaterialColourAnimation anim = MaterialColourAnimation.Load(Raw(code));
+            FadeCache[code] = anim;
+            return anim;
+        }
+
+        private static JointAnimation LoadJoint(int code)
+        {
+            if (JointCache.TryGetValue(code, out JointAnimation hit)) return hit;
+            JointAnimation anim = JointAnimation.Load(Raw(code));
+            JointCache[code] = anim;
+            return anim;
+        }
+
+        /// <summary>
+        /// The sound a door makes, which the DoorKind byte picks.
+        /// </summary>
+        public static string DoorSound(int modelId, bool indoor, bool opening)
+        {
+            BuildingAnimationInfo info = InfoFor(modelId, indoor);
+            switch (info?.DoorKind ?? 0)
+            {
+                case 1: return opening ? "a door opening" : "a door closing";
+                case 2: return opening ? "an automatic door opening" : "an automatic door closing";
+                case 3: return opening ? "a glass door opening" : "a glass door closing";
+                case 4: return opening ? "a sliding door opening" : "a sliding door closing";
+                default: return null;
+            }
+        }
+
+        /// <summary>A door's animations, which the games only play when somebody goes through. </summary>
+        public static (IReadOnlyList<JointAnimation> Joints, IReadOnlyList<TexturePatternAnimation> Patterns)
+            DoorAnimations(int modelId, bool indoor)
+        {
+            BuildingAnimationInfo info = InfoFor(modelId, indoor);
+            if (info == null || !info.Animates || !info.IsDoor)
+                return (Array.Empty<JointAnimation>(), Array.Empty<TexturePatternAnimation>());
+
+            List<JointAnimation> joints = new List<JointAnimation>();
+            List<TexturePatternAnimation> patterns = new List<TexturePatternAnimation>();
+            foreach (int code in info.UsedCodes)
+            {
+                JointAnimation j = LoadJoint(code);
+                if (j != null && j.Moves) joints.Add(j);
+                TexturePatternAnimation t = LoadPattern(code);
+                if (t != null) patterns.Add(t);
+            }
+            return (joints, patterns);
+        }
+
+        /// <summary>What a building model's animations wait for, when they do not just run on their own.</summary>
+        public static (bool Door, bool TimeOfDay) WaitsFor(int modelId, bool indoor)
+        {
+            BuildingAnimationInfo info = InfoFor(modelId, indoor);
+            if (info == null || !info.Animates) return (false, false);
+            return (info.IsDoor, info.IsTimeOfDay);
+        }
+
+        private static TextureSrtAnimation LoadScrolling(int code)
+        {
+            if (ScrollCache.TryGetValue(code, out TextureSrtAnimation hit)) return hit;
+            // Load returns null for anything that isn't a scrolling animation, which is most of the
+            // archive, so the other kinds simply fall out here.
+            TextureSrtAnimation anim = TextureSrtAnimation.Load(Raw(code));
+            ScrollCache[code] = anim;
+            return anim;
+        }
+
+        private static TexturePatternAnimation LoadPattern(int code)
+        {
+            if (PatternCache.TryGetValue(code, out TexturePatternAnimation hit)) return hit;
+            TexturePatternAnimation anim = TexturePatternAnimation.Load(Raw(code));
+            PatternCache[code] = anim;
+            return anim;
+        }
+
+        private static byte[] Raw(int code)
+        {
+            if (code < 0) return null;
+            Refresh();
+            if (RawCache.TryGetValue(code, out byte[] hit)) return hit;
+
+            byte[] data = null;
+            try
+            {
+                DSUtils.TryUnpackNarcs(new List<DirNames> { DirNames.BuildingAnimations });
+                string path = Path.Combine(GameDirs[DirNames.BuildingAnimations].unpackedDir, code.ToString("D4"));
+                if (File.Exists(path)) data = File.ReadAllBytes(path);
+            }
+            catch (Exception ex) { AppLogger.Error($"Building animation {code} failed to load: {ex.Message}"); }
+
+            RawCache[code] = data;
+            return data;
+        }
+
+        private static void Refresh()
+        {
+            string dir = GameDirs[DirNames.BuildingAnimations].unpackedDir;
+            if (dir == _cacheDir) return;
+            InfoCache.Clear();
+            ScrollCache.Clear();
+            PatternCache.Clear();
+            JointCache.Clear();
+            FadeCache.Clear();
+            RawCache.Clear();
+            _cacheDir = dir;
+        }
+    }
+}

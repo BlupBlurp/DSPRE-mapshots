@@ -1,0 +1,215 @@
+using System;
+using System.Collections.Generic;
+
+namespace DSPRE.ROMFiles
+{
+    /// <summary>One row of the games' field camera table.</summary>
+    public sealed class FieldCameraEntry
+    {
+        public const float FixedPointOne = 4096f;
+
+        /// <summary>Degrees in one step of the games' 65536-step turn.</summary>
+        public const float TurnDegrees = 360f / 65536f;
+
+        /// <summary>One tile is sixteen units in the games' own field coordinates.</summary>
+        public const float GameUnitsPerTile = 16f;
+
+        public int Id { get; }
+        public string Name { get; }
+        public int RawDistance { get; }
+        public int RawPitch { get; }
+        public int RawYaw { get; }
+
+        /// <summary>The stored roll, already zero for Diamond and Pearl, which never apply it.</summary>
+        public int RawRoll { get; }
+
+        public bool Orthographic { get; }
+
+        /// <summary>PerspWay.</summary>
+        public int RawHalfFieldOfView { get; }
+
+        public int NearClip { get; }
+        public int FarClip { get; }
+
+        /// <summary>Moves the whole view, camera and what it looks at together, in game units.</summary>
+        public int ShiftX { get; }
+        public int ShiftY { get; }
+        public int ShiftZ { get; }
+
+        internal FieldCameraEntry(int id, string name, int distance, int pitch, bool ortho,
+                                  int halfFov, int near, int far, int sx, int sy, int sz, int yaw = 0, int roll = 0)
+        {
+            Id = id; Name = name;
+            RawDistance = distance; RawPitch = pitch; Orthographic = ortho;
+            RawYaw = yaw; RawRoll = roll;
+            RawHalfFieldOfView = halfFov; NearClip = near; FarClip = far;
+            ShiftX = sx; ShiftY = sy; ShiftZ = sz;
+        }
+
+        /// <summary>How far back the camera sits, in tiles.</summary>
+        public float DistanceInTiles => RawDistance / FixedPointOne / GameUnitsPerTile;
+
+        /// <summary>How far the camera looks down, in degrees. The stored angle is negative.</summary>
+        public float PitchDegrees => -RawPitch * TurnDegrees;
+
+        /// <summary>Which way the camera turns about the player; at zero it looks north.</summary>
+        public float YawDegrees => RawYaw * TurnDegrees;
+
+        /// <summary>
+        /// How far the picture tilts. Platinum and HGSS add the rolled up vector to the upright one, so the
+        /// screen turns half the stored angle.
+        /// </summary>
+        public float RollDegrees => RawRoll * TurnDegrees / 2f;
+
+        /// <summary>Half the vertical view angle, as the table stores it.</summary>
+        public float HalfFieldOfViewDegrees => RawHalfFieldOfView * TurnDegrees;
+
+        /// <summary>The whole vertical view angle, for renderers.</summary>
+        public float FieldOfViewDegrees => HalfFieldOfViewDegrees * 2f;
+
+        public float ShiftXInTiles => ShiftX / FixedPointOne / GameUnitsPerTile;
+        public float ShiftYInTiles => ShiftY / FixedPointOne / GameUnitsPerTile;
+        public float ShiftZInTiles => ShiftZ / FixedPointOne / GameUnitsPerTile;
+
+        /// <summary>How many tiles fit on screen top to bottom at the distance the camera sits.</summary>
+        public float VisibleTilesAtTarget =>
+            2f * DistanceInTiles * (float)Math.Tan(HalfFieldOfViewDegrees * Math.PI / 180.0);
+
+        /// <summary>Half the height of the flat view, for the two entries that use one. </summary>
+        public float OrthoHalfHeightInTiles => VisibleTilesAtTarget / 2f;
+
+        /// <summary>The camera distance in the units the preview's scene uses.</summary>
+        public float DistanceForScene(float tileSize) => DistanceInTiles * tileSize;
+    }
+
+    /// <summary>Where the games put the camera while you walk about a map. </summary>
+    public static class FieldCamera
+    {
+        // id, name, distance, pitch, orthographic, half view angle, near, far, shift x/y/z
+        private static readonly FieldCameraEntry[] Table =
+        {
+            new FieldCameraEntry( 0, "Normal",                    0x29aec1, -0x229e, false, 0x5c1, 150, 1200, 0, 0, 0),
+            new FieldCameraEntry( 1, "Violet Gym",                0x19465c, -0x1c7d, false, 0x981, 134, 1200, 0, 0x25000, -0xf000),
+            new FieldCameraEntry( 2, "Goldenrod Gym",             0x29aec1, -0x1c3e, false, 0x5c1, 150, 1200, 0, 0, 0),
+            new FieldCameraEntry( 3, "Olivine Lighthouse roof",   0x29aec1, -0x0dbe, false, 0x5c1, 150, 1200, 0, 0x1e9c5, -0xc0c9),
+            new FieldCameraEntry( 4, "Flat indoor view",          0x61b89b, -0x237e, true,  0x281, 150, 1735, 0, 0, 0),
+            new FieldCameraEntry( 5, "Azalea Gym",                0x1d19f6, -0x225e, false, 0x881, 150, 1160, 0, 0, -0x18000),
+            new FieldCameraEntry( 6, "Lugia",                     0x29aec1, -0x201e, false, 0x5c1, 150, 1500, 0, 0, 0),
+            new FieldCameraEntry( 7, "Second Azalea Gym camera",  0x29aec1, -0x1e1e, false, 0x5c1, 150, 1200, 0, 0x17c5b, -0x16a1e),
+            new FieldCameraEntry( 8, "Battle Frontier",           0x20374c, -0x26de, false, 0x770, 150,  900, 0, 0, 0),
+            new FieldCameraEntry( 9, "Vermilion Gym",             0x29bec1, -0x2a7e, false, 0x5c1, 150, 1200, 0, 0, 0),
+            new FieldCameraEntry(10, "Lugia from above",          0x13c805, -0x20be, false, 0xc81, 150, 1700, 0, 0xc5f1, -0x25c74),
+            new FieldCameraEntry(11, "Ladder dungeon test",       0x215c29, -0x1c3e, false, 0x741, 150, 1200, 0, -0x8000, 0),
+            new FieldCameraEntry(12, "Lugia from below",          0x29aec1, -0x201e, false, 0x5c1, 150, 1700, 0, 0, -0x20000),
+            new FieldCameraEntry(13, "Bell Tower roof",           0x29aec1, -0x0dbe, false, 0x5c1, 150, 1700, 0, 0x1e9c5, -0x1e0c9),
+            new FieldCameraEntry(14, "Fuchsia Gym",               0x29aec1, -0x2b3e, false, 0x5c1, 150, 1200, 0, 0, 0),
+            new FieldCameraEntry(15, "Flat Dance Theatre view",   0x61b89b, -0x237e, true,  0x281, 150, 1735, 0, 0, -0x2e000),
+            new FieldCameraEntry(16, "Battle Tower indoors",      0x29aec1, -0x29fe, false, 0x5c1, 150,  900, 0, 0, 0),
+        };
+
+        // sCameraTypes in field_camera.c. Platinum's rows carry no shift.
+        private static readonly FieldCameraEntry[] PlatinumTable =
+        {
+            new FieldCameraEntry( 0, "Normal",                    0x29aec1, -0x29fe, false, 0x5c1, 150,  900, 0, 0, 0),
+            new FieldCameraEntry( 1, "Pastoria Gym",              0x29aec1, -0x309e, false, 0x5c1, 150,  900, 0, 0, 0),
+            new FieldCameraEntry( 2, "Zoomed in",                 0x20374c, -0x26de, false, 0x770, 150,  900, 0, 0, 0),
+            new FieldCameraEntry( 3, "Canalave Gym",              0x29aec1, -0x29fe, false, 0x5c1, 150,  900, 0, 0, 0),
+            new FieldCameraEntry( 4, "Flat indoor view",          0x61b89b, -0x239e, true,  0x281, 150, 1735, 0, 0, 0),
+            new FieldCameraEntry( 5, "Spear Pillar",              0x13c805, -0x29fd, false, 0xc01,  10, 1008, 0, 0, 0),
+            new FieldCameraEntry( 6, "South side of Mt. Coronet", 0x3628df, -0x33fd, false, 0x481, 115, 1221, 0, 0, 0),
+            new FieldCameraEntry( 7, "North side of Mt. Coronet", 0x29aec1, -0x29fd, false, 0x5c1, 153, 1031, 0, 0, 0),
+            new FieldCameraEntry( 8, "Stark Mountain",            0x296ec1, -0x321d, false, 0x701, 150, 1034, 0, 0, 0),
+            new FieldCameraEntry( 9, "Oreburgh Gym",              0x1659ac, -0x1cdd, false, 0xab0, 150,  900, 0, 0, 0),
+            new FieldCameraEntry(10, "Veilstone Gym",             0x4b25b1, -0x2b3d, false, 0x341, 150, 1746, 0, 0, 0),
+            new FieldCameraEntry(11, "Slightly zoomed out",       0x2a3d55, -0x291d, false, 0x5c1, 230, 1127, 0, 0, 0),
+            new FieldCameraEntry(12, "Cave",                      0x23e93f, -0x2cfd, false, 0x6c1, 150,  900, 0, 0, 0),
+            new FieldCameraEntry(13, "Iron Island cave",          0x20374c, -0x21fd, false, 0x770, 150,  900, 0, 0, 0),
+            new FieldCameraEntry(14, "Hall of Origin",            0x0a9765, -0x37bc, false, 0x1501, 10, 1008, 0, 0, 0),
+            new FieldCameraEntry(15, "Lake Acuity",               0x28dedf, -0x26de, false, 0x5f0, 150,  900, 0, 0, 0),
+            new FieldCameraEntry(16, "Unused",                    0x14aec0, -0x29fe, false, 0xb01, 150,  900, 0, 0, 0),
+        };
+
+        public static IReadOnlyList<FieldCameraEntry> Entries => Table;
+
+        public static int Count => Table.Length;
+
+        /// <summary>The row a header's camera number picks. Out of range falls back to the normal one.</summary>
+        public static FieldCameraEntry Entry(int cameraId) =>
+            cameraId >= 0 && cameraId < Table.Length ? Table[cameraId] : Table[0];
+
+        /// <summary>The camera table the given game uses.</summary>
+        public static IReadOnlyList<FieldCameraEntry> EntriesFor(RomInfo.GameFamilies family) =>
+            family == RomInfo.GameFamilies.HGSS ? Table : PlatinumTable;
+
+        /// <summary>
+        /// The row a header's camera number picks in the given game: the open ROM's own table when it is
+        /// that game, so edited cameras show as edited, else the built-in copy.
+        /// </summary>
+        public static FieldCameraEntry Entry(int cameraId, RomInfo.GameFamilies family)
+        {
+            IReadOnlyList<FieldCameraEntry> table = EntriesFor(family);
+            if (family == RomInfo.GameFamily)
+            {
+                List<GameCamera> rom = RomRows();
+                if (rom != null && rom.Count > 0)
+                {
+                    int id = cameraId >= 0 && cameraId < rom.Count ? cameraId : 0;
+                    return FromGameCamera(id, NameFor(id, family), rom[id], family);
+                }
+            }
+            return cameraId >= 0 && cameraId < table.Count ? table[cameraId] : table[0];
+        }
+
+        /// <summary>A camera table row as the preview reads it.</summary>
+        public static FieldCameraEntry FromGameCamera(int id, string name, GameCamera c, RomInfo.GameFamilies family) =>
+            new FieldCameraEntry(id, name, (int)c.Distance, c.VertRot, c.PerspMode == GameCamera.ORTHO,
+                c.Fov, (int)(c.NearClip >> 12), (int)(c.FarClip >> 12), c.XOffset ?? 0, c.YOffset ?? 0, c.ZOffset ?? 0,
+                c.HoriRot, family == RomInfo.GameFamilies.DP ? 0 : c.ZRot);
+
+        /// <summary>The built-in name for a row; Diamond and Pearl's rows have none.</summary>
+        public static string NameFor(int id, RomInfo.GameFamilies family)
+        {
+            if (family == RomInfo.GameFamilies.DP) return "Camera " + id;
+            IReadOnlyList<FieldCameraEntry> table = EntriesFor(family);
+            return id >= 0 && id < table.Count ? table[id].Name : "Camera " + id;
+        }
+
+        private static List<GameCamera> _romRows;
+        private static string _romRowsFor;
+
+        static FieldCamera() => GameCameraTable.Saved += (_, _) => _romRows = null;
+
+        private static List<GameCamera> RomRows()
+        {
+            string project = RomInfo.WorkDir;
+            if (_romRows == null || _romRowsFor != project)
+            {
+                _romRows = GameCameraTable.TryRead();
+                _romRowsFor = project;
+            }
+            return _romRows;
+        }
+
+        /// <summary>The ordinary walking camera most maps use.</summary>
+        public static FieldCameraEntry Normal => Table[0];
+
+        /// <summary>Which way the normal camera faces; no retail row turns it.</summary>
+        public const float YawDegrees = 0f;
+
+        /// <summary>
+        /// How many frames the camera's height lags behind the player, from FIELD_CAMERA_DELAY.
+        /// </summary>
+        public const int TrailFrames = 6;
+
+        /// <summary>Only the height is delayed. </summary>
+        public const bool HeightLagsBehind = true;
+
+        // Kept so callers that only ever wanted the ordinary camera read the same as before.
+        public const float GameUnitsPerTile = FieldCameraEntry.GameUnitsPerTile;
+        public static float DistanceInTiles => Normal.DistanceInTiles;
+        public static float PitchDegrees => Normal.PitchDegrees;
+        public static float HalfFieldOfViewDegrees => Normal.HalfFieldOfViewDegrees;
+        public static float FieldOfViewDegrees => Normal.FieldOfViewDegrees;
+        public static float DistanceForScene(float tileSize) => Normal.DistanceForScene(tileSize);
+    }
+}

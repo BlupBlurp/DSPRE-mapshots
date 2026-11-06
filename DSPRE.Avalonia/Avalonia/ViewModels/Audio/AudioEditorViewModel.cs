@@ -1,0 +1,846 @@
+using System;
+using System.Collections.Generic;
+using System.Collections.ObjectModel;
+using System.ComponentModel;
+using System.Linq;
+using System.Runtime.CompilerServices;
+using System.Threading.Tasks;
+using DSPRE.Avalonia.Data;
+using DSPRE.Editors;
+
+namespace DSPRE.Avalonia.ViewModels.Audio
+{
+    /// <summary>One thing you can listen to, whichever part of the ROM it came from.</summary>
+    public sealed class AudioItem : INotifyPropertyChanged
+    {
+        public event PropertyChangedEventHandler PropertyChanged;
+
+        /// <summary>Where to find it: a sequence number, or a species number for a cry.</summary>
+        public int Number;
+
+        /// <summary>Whether this is a cry, which has a sample to itself.</summary>
+        public bool IsCry;
+
+        /// <summary>
+        /// Whether this is another of the ROM's samples, an instrument or a sound effect's noise; it can be replaced
+        /// like a cry.
+        /// </summary>
+        public bool IsSample;
+
+        /// <summary>For a sample, which set it lives in and where in that set.</summary>
+        public int WaveArc = -1, SampleIndex = -1;
+
+        public string Name = "";
+        public string Detail = "";
+
+        /// <summary>For a sequence, its instrument bank, and whether the overworld loads it with its sound groups.</summary>
+        public int Bank = -1;
+        public bool InOverworld;
+
+        /// <summary>For a cry, the Pokemon number its bank is named after, which is not always the bank's
+        /// own number: HeartGold's bank 474 is BANK_PV504, Rotom's Wash form.</summary>
+        public int NamedNumber;
+
+        private bool _isPending;
+        /// <summary>Imported and not saved yet.</summary>
+        public bool IsPending
+        {
+            get => _isPending;
+            set
+            {
+                if (_isPending == value) return;
+                _isPending = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsPending)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Label)));
+            }
+        }
+
+        public string Label => $"{Number,5}  {Name}" + (_isPending ? "  (not saved)" : "");
+    }
+
+    /// <summary>A group in the audio trees: a bank of tunes or effects, or a set of sounds.</summary>
+    public sealed class AudioGroup : INotifyPropertyChanged
+    {
+        public event PropertyChangedEventHandler PropertyChanged;
+        public string Name { get; init; }
+        public ObservableCollection<AudioItem> Items { get; } = new();
+        public string Count => Items.Count.ToString();
+
+        private bool _isExpanded;
+        public bool IsExpanded
+        {
+            get => _isExpanded;
+            set { if (_isExpanded == value) return; _isExpanded = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsExpanded))); }
+        }
+    }
+
+    /// <summary>Everything the ROM can play, in one place.</summary>
+    public class AudioEditorViewModel : INotifyPropertyChanged, IEditorWithUnsavedChanges, ISupportsUndo
+    {
+        public event PropertyChangedEventHandler PropertyChanged;
+        private void OnPropertyChanged([CallerMemberName] string n = null)
+            => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(n));
+        private bool Set<T>(ref T field, T value, [CallerMemberName] string n = null)
+        {
+            if (EqualityComparer<T>.Default.Equals(field, value)) return false;
+            field = value; OnPropertyChanged(n); return true;
+        }
+
+        public ObservableCollection<AudioItem> Cries { get; } = new();
+        public ObservableCollection<AudioItem> Music { get; } = new();
+        public ObservableCollection<AudioItem> Fanfares { get; } = new();
+        public ObservableCollection<AudioItem> Effects { get; } = new();
+        public ObservableCollection<AudioGroup> EffectBanks { get; } = new();
+        public ObservableCollection<AudioGroup> MusicBanks { get; } = new();
+        public ObservableCollection<AudioGroup> SoundSets { get; } = new();
+        private readonly Dictionary<int, string> _bankNames = new();
+        public ObservableCollection<AudioItem> Sounds { get; } = new();
+
+        private readonly List<AudioItem> _allCries = new();
+        private readonly List<AudioItem> _allMusic = new();
+        private readonly List<AudioItem> _allFanfares = new();
+        private readonly List<AudioItem> _allEffects = new();
+        private readonly List<AudioItem> _allSounds = new();
+
+        public AudioEditorViewModel() : this(null) { }
+
+        private enum Player { None, Music, Fanfare, Effect }
+
+        /// <summary>Which tab a sequence goes on, by the player the game uses for it, not by its name.</summary>
+        private static Player PlayerOf(SdatArchive sdat, int seq, string name)
+        {
+            int player = -1;
+            if (seq >= 0 && seq < sdat.Sequences.Count && sdat.Sequences[seq] != null)
+                player = sdat.Sequences[seq].PlayerNo;
+
+            switch (player)
+            {
+                case 1: case 7: return Player.Music;
+                case 2: return Player.Fanfare;
+                case 3: case 4: case 5: case 6: return Player.Effect;
+                // The rest of the cry player's sequences aren't music, so they go with the sound effects.
+                case 0: return Player.Effect;
+            }
+
+            if (name.StartsWith("SEQ_ME_", StringComparison.Ordinal)) return Player.Fanfare;
+            if (name.StartsWith("SEQ_SE_", StringComparison.Ordinal)) return Player.Effect;
+            if (name.StartsWith("SEQ_PV", StringComparison.Ordinal)) return Player.Effect;
+            if (name.StartsWith("SEQ_", StringComparison.Ordinal)) return Player.Music;
+            return Player.None;
+        }
+
+        public AudioEditorViewModel(IReadOnlyList<string> pokemonNames)
+        {
+            SdatArchive sdat = SoundArchive.Load();
+            if (sdat == null) { StatusText = "This ROM has no sound archive."; return; }
+
+            // The two groups the field loads.
+            HashSet<int> overworld = new HashSet<int>();
+            foreach (KeyValuePair<int, string> g in sdat.GroupNames)
+                if (g.Value is "GROUP_GLOBAL" or "GROUP_SE_FIELD" && g.Key < sdat.Groups.Count)
+                    foreach (SdatGroupItem it in sdat.Groups[g.Key])
+                        if (it.Type == 0) overworld.Add(it.Index);
+
+            foreach (KeyValuePair<int, string> kv in sdat.SeqNames.OrderBy(k => k.Key))
+            {
+                string name = kv.Value ?? "";
+                SdatSeqInfo seq = kv.Key < sdat.Sequences.Count ? sdat.Sequences[kv.Key] : null;
+                AudioItem item = new AudioItem { Number = kv.Key, Name = name, Bank = seq?.BankNo ?? -1, InOverworld = overworld.Contains(kv.Key) };
+
+                // The cry sequence is what the Cries tab stands for, so it is not listed twice.
+                if (name == SoundArchive.CrySequenceName) continue;
+
+                switch (PlayerOf(sdat, kv.Key, name))
+                {
+                    case Player.Fanfare: _allFanfares.Add(item); break;
+                    case Player.Effect: _allEffects.Add(item); break;
+                    case Player.Music: _allMusic.Add(item); break;
+                    default: break;
+                }
+            }
+
+            // A cry belongs to a Pokemon, not to a sequence, so it is listed by the number the game plays
+            // it with: the bank on a vanilla ROM, the wave archive on an hg-engine one.
+            foreach (int cry in SoundArchive.CryNumbers())
+            {
+                string label = pokemonNames != null && cry > 0 && cry < pokemonNames.Count
+                               && !string.IsNullOrWhiteSpace(pokemonNames[cry])
+                    ? pokemonNames[cry]
+                    : "PV" + cry.ToString("D3");
+
+                _allCries.Add(new AudioItem { Number = cry, Name = label, IsCry = true, NamedNumber = cry });
+            }
+
+            // The samples that aren't cries: what tunes and sound effects are made of.
+            foreach ((int Arc, string Name, int Count) set in SoundArchive.SampleArchives())
+            {
+                string shown = set.Name.StartsWith("WAVE_ARC_", StringComparison.Ordinal)
+                    ? set.Name.Substring("WAVE_ARC_".Length) : set.Name;
+                for (int i = 0; i < set.Count; i++)
+                    _allSounds.Add(new AudioItem
+                    {
+                        Number = set.Arc,
+                        Name = set.Count == 1 ? shown : shown + "  " + i,
+                        IsSample = true, WaveArc = set.Arc, SampleIndex = i,
+                        Detail = set.Name,
+                    });
+            }
+
+            foreach (KeyValuePair<int, string> bank in sdat.BankNames) _bankNames[bank.Key] = bank.Value;
+
+            ApplyFilter();
+            StatusText = $"{_allCries.Count} cries, {_allMusic.Count} tunes, {_allFanfares.Count} fanfares, "
+                   + $"{_allEffects.Count} sound effects, {_allSounds.Count} sounds.";
+        }
+
+        // ── narrowing the lists down ────────────────────────────────────────────────
+
+        private string _search = "";
+        /// <summary>Types into all four lists at once, since somebody rarely knows which tab a name is on.</summary>
+        public string Search
+        {
+            get => _search;
+            set { if (Set(ref _search, value)) ApplyFilter(); }
+        }
+
+        private bool _overworldOnly;
+        public bool OverworldOnly
+        {
+            get => _overworldOnly;
+            set { if (Set(ref _overworldOnly, value)) ApplyFilter(); }
+        }
+
+        private void ApplyFilter()
+        {
+            void Fill(ObservableCollection<AudioItem> into, List<AudioItem> from, Func<AudioItem, bool> keep = null)
+            {
+                into.Clear();
+                foreach (AudioItem i in from)
+                    if ((keep == null || keep(i))
+                     && (string.IsNullOrWhiteSpace(_search)
+                         || SearchMatch.Contains(i.Name, _search)
+                         || i.Number.ToString().Contains(_search)))
+                        into.Add(i);
+            }
+            Fill(Cries, _allCries);
+            Fill(Fanfares, _allFanfares);
+            FillGroups(MusicBanks, Music, _allMusic, i => i.Bank, BankName);
+            FillGroups(EffectBanks, Effects, _allEffects, i => i.Bank, BankName, i => !_overworldOnly || i.InOverworld);
+            FillGroups(SoundSets, Sounds, _allSounds, i => i.WaveArc, a => _allSounds.First(s => s.WaveArc == a).Detail);
+            OnPropertyChanged(nameof(FoundSummary));
+        }
+
+        private string BankName(int bank) => _bankNames.TryGetValue(bank, out string n) ? n : bank < 0 ? "No bank" : "Bank " + bank;
+
+        // A search that names a group keeps the whole group; otherwise only the items whose name matches.
+        private void FillGroups(ObservableCollection<AudioGroup> groups, ObservableCollection<AudioItem> flat, List<AudioItem> from,
+                                Func<AudioItem, int> key, Func<int, string> groupName, Func<AudioItem, bool> keep = null)
+        {
+            groups.Clear();
+            flat.Clear();
+            bool searching = !string.IsNullOrWhiteSpace(_search);
+            foreach (IGrouping<int, AudioItem> part in from.GroupBy(key).OrderBy(b => b.Key))
+            {
+                string name = groupName(part.Key);
+                bool groupMatches = searching && SearchMatch.Contains(name, _search);
+                AudioGroup group = new AudioGroup { Name = name, IsExpanded = searching };
+                foreach (AudioItem i in part)
+                    if ((keep == null || keep(i))
+                        && (!searching || groupMatches || SearchMatch.Contains(i.Name, _search) || i.Number.ToString().Contains(_search)))
+                    {
+                        group.Items.Add(i);
+                        flat.Add(i);
+                    }
+                if (group.Items.Count > 0) groups.Add(group);
+            }
+        }
+
+        // What each tree has picked; a group row picks nothing.
+        public object SelectedMusicNode
+        {
+            get => _selectedMusic;
+            set { SelectedMusic = value as AudioItem; OnPropertyChanged(); }
+        }
+        public object SelectedEffectNode
+        {
+            get => _selectedEffect;
+            set { SelectedEffect = value as AudioItem; OnPropertyChanged(); }
+        }
+        public object SelectedSoundNode
+        {
+            get => _selectedSound;
+            set { SelectedSound = value as AudioItem; OnPropertyChanged(); }
+        }
+
+        public string FoundSummary => string.IsNullOrWhiteSpace(_search)
+            ? ""
+            : $"{Cries.Count + Music.Count + Fanfares.Count + Effects.Count + Sounds.Count} "
+              + $"match “{_search}”";
+
+        // ── what is picked ──────────────────────────────────────────────────────────
+
+        // Each tab remembers what is picked in it. They cannot share one, because picking in one list
+        // makes the other three drop their own choice, and that would immediately wipe the new one.
+        private AudioItem _selectedCry, _selectedMusic, _selectedFanfare, _selectedEffect,
+                          _selectedSound;
+
+        public AudioItem SelectedCry
+        {
+            get => _selectedCry;
+            set { if (Set(ref _selectedCry, value)) SelectionChanged(); }
+        }
+        public AudioItem SelectedMusic
+        {
+            get => _selectedMusic;
+            set { if (Set(ref _selectedMusic, value)) SelectionChanged(); }
+        }
+        public AudioItem SelectedFanfare
+        {
+            get => _selectedFanfare;
+            set { if (Set(ref _selectedFanfare, value)) SelectionChanged(); }
+        }
+        public AudioItem SelectedEffect
+        {
+            get => _selectedEffect;
+            set { if (Set(ref _selectedEffect, value)) SelectionChanged(); }
+        }
+        public AudioItem SelectedSound
+        {
+            get => _selectedSound;
+            set { if (Set(ref _selectedSound, value)) SelectionChanged(); }
+        }
+
+        private int _tab;
+        /// <summary>The open tab; the buttons act on its selection.</summary>
+        public int SelectedTab
+        {
+            get => _tab;
+            set { if (Set(ref _tab, value)) SelectionChanged(); }
+        }
+
+        /// <summary>Opens on one Pokemon's cry, for arriving here from the Pokemon editor. </summary>
+        public void ShowCryFor(int species)
+        {
+            Search = "";
+            AudioItem row = Cries.FirstOrDefault(c => c.NamedNumber == species)
+                   ?? Cries.FirstOrDefault(c => c.Number == species);
+            if (row == null) return;
+            SelectedTab = 0;
+            SelectedCry = row;
+        }
+
+        private void SelectionChanged()
+        {
+            OnPropertyChanged(nameof(Selected));
+            OnPropertyChanged(nameof(CanPlay));
+            OnPropertyChanged(nameof(CanImport));
+            OnPropertyChanged(nameof(CanSaveMidi));
+            OnPropertyChanged(nameof(CanSaveSoundFont));
+            OnPropertyChanged(nameof(SaveSoundFontHelp));
+            OnPropertyChanged(nameof(SaveMidiHelp));
+            OnPropertyChanged(nameof(SelectedDescription));
+        }
+
+        /// <summary>Whatever is picked on the tab that is open.</summary>
+        public AudioItem Selected => _tab switch
+        {
+            0 => _selectedCry,
+            1 => _selectedMusic,
+            2 => _selectedFanfare,
+            3 => _selectedEffect,
+            _ => _selectedSound,
+        };
+
+        public bool CanPlay => Selected != null;
+
+        /// <summary>A sample can be replaced. A sequence can't, because it's notes, not sound.</summary>
+        public bool CanImport => Selected != null && (Selected.IsCry || Selected.IsSample);
+
+        public string SelectedDescription
+        {
+            get
+            {
+                AudioItem it = Selected;
+                if (it == null) return "";
+                string name = it.IsSample ? $"{it.Detail} sound {it.SampleIndex}" : it.Name;
+                return it.IsPending ? name + " (not saved)" : name;
+            }
+        }
+
+        /// <summary>Why the Import button is on for a sample and off for a sequence.</summary>
+        public string ImportHelp =>
+            (Selected != null && Selected.IsSample
+                ? "Import a WAV over this sound.\n\n"
+                : "Import a WAV as this Pokémon's cry.\n\n")
+            + SoundArchive.HowItWorks + "\n\n"
+            + CryFiles.AcceptedFormat + "\n\n"
+            + "It's compressed as the game compresses its sounds, so it takes about the same room. That loses "
+            + "a little detail, so import from your own source each time instead of exporting and importing "
+            + "the same sound again.\n\n"
+            + "Cries and the sounds on the Sounds tab can be replaced this way. Music, fanfares and sound "
+            + "effects can't: they're notes, not sound, and what they play is on the Sounds tab.";
+
+        private string _status = "";
+        public string StatusText { get => _status; set => Set(ref _status, value); }
+
+        // ── imports waiting for Save ────────────────────────────────────────────────
+
+        // On hg-engine an imported cry is a checkout file, so it is held here until the user saves.
+        private readonly Dictionary<AudioItem, SoundArchive.PendingCry> _pendingCries = new();
+
+        // Everything else replaces a sample in the ROM's sound archive, held in the order it was imported.
+        private sealed class HeldSample
+        {
+            public AudioItem Item;
+            public SoundArchive.PendingSample Sample;
+        }
+        private readonly List<HeldSample> _pendingSamples = new();
+
+        // Rendering runs off the UI thread, so the held list and the archive built from it share a lock.
+        private readonly object _heldLock = new();
+        private SdatArchive _withHeld;
+        private int _heldVersion;
+
+        public bool HasUnsavedChanges
+        {
+            get { lock (_heldLock) return _pendingCries.Count + _pendingSamples.Count > 0; }
+        }
+
+        // ── undo: each import is a step, kept as the held imports before and after it ──
+        private sealed class Held
+        {
+            public Dictionary<AudioItem, SoundArchive.PendingCry> Cries;
+            public List<(AudioItem Item, SoundArchive.PendingSample Sample)> Samples;
+        }
+        private readonly UndoHistory<Held> _history = new UndoHistory<Held>();
+
+        private Held TakeHeld()
+        {
+            lock (_heldLock)
+                return new Held
+                {
+                    Cries = new Dictionary<AudioItem, SoundArchive.PendingCry>(_pendingCries),
+                    Samples = _pendingSamples.Select(h => (h.Item, h.Sample)).ToList(),
+                };
+        }
+
+        private void RestoreHeld(Held held)
+        {
+            List<AudioItem> was;
+            lock (_heldLock)
+            {
+                was = _pendingCries.Keys.Concat(_pendingSamples.Select(h => h.Item)).ToList();
+                _pendingCries.Clear();
+                foreach (KeyValuePair<AudioItem, SoundArchive.PendingCry> kv in held.Cries) _pendingCries[kv.Key] = kv.Value;
+                _pendingSamples.Clear();
+                foreach ((AudioItem item, SoundArchive.PendingSample sample) in held.Samples) _pendingSamples.Add(new HeldSample { Item = item, Sample = sample });
+                _withHeld = null; _heldVersion++;
+            }
+            foreach (AudioItem item in was) item.IsPending = false;
+            foreach (AudioItem item in held.Cries.Keys.Concat(held.Samples.Select(h => h.Item))) item.IsPending = true;
+            PendingChanged();
+        }
+
+        public bool CanUndo => _history.CanUndo;
+        public bool CanRedo => _history.CanRedo;
+
+        public void Undo()
+        {
+            if (!_history.CanUndo) return;
+            RestoreHeld(_history.Undo());
+            RaiseSteps();
+        }
+
+        public void Redo()
+        {
+            if (!_history.CanRedo) return;
+            RestoreHeld(_history.Redo());
+            RaiseSteps();
+        }
+
+        // The step goes from exactly what was held before the import, even if something else changed it since the last one.
+        private void Stepped(Held before)
+        {
+            _history.Capture(before, coalesce: true);
+            _history.Capture(TakeHeld());
+            RaiseSteps();
+        }
+
+        private void ForgetSteps()
+        {
+            _history.Reset(null);
+            RaiseSteps();
+        }
+
+        private void RaiseSteps() { OnPropertyChanged(nameof(CanUndo)); OnPropertyChanged(nameof(CanRedo)); }
+
+        public string UnsavedChangesDescription
+        {
+            get
+            {
+                int cries, sounds;
+                lock (_heldLock)
+                {
+                    cries = _pendingCries.Count + _pendingSamples.Count(h => h.Item.IsCry);
+                    sounds = _pendingSamples.Count(h => !h.Item.IsCry);
+                }
+                string c = cries == 1 ? "1 imported cry" : $"{cries} imported cries";
+                string s = sounds == 1 ? "1 imported sound" : $"{sounds} imported sounds";
+                return cries > 0 && sounds > 0 ? c + " and " + s : sounds > 0 ? s : c;
+            }
+        }
+
+        /// <summary>Holds a cry until Save, replacing one already held for the same Pokemon.</summary>
+        public void StageCry(AudioItem item, SoundArchive.PendingCry cry)
+        {
+            if (item == null || cry == null) return;
+            Held before = TakeHeld();
+            lock (_heldLock) _pendingCries[item] = cry;
+            item.IsPending = true;
+            PendingChanged();
+            Stepped(before);
+            StatusText = $"Ready to save to {cry.RelPath}.";
+        }
+
+        /// <summary>Holds a replacement sample until Save, replacing one already held for the same slot.</summary>
+        public void StageSample(AudioItem item, SoundArchive.PendingSample sample)
+        {
+            if (item == null || sample?.Sample == null) return;
+            Held before = TakeHeld();
+            lock (_heldLock)
+            {
+                HeldSample same = _pendingSamples.FirstOrDefault(h => h.Sample.WaveArc == sample.WaveArc && h.Sample.Index == sample.Index);
+                if (same == null) _pendingSamples.Add(new HeldSample { Item = item, Sample = sample });
+                else
+                {
+                    // Two rows can reach one slot, and only the latest import will be written there.
+                    if (!ReferenceEquals(same.Item, item)) same.Item.IsPending = false;
+                    same.Item = item;
+                    same.Sample = sample;
+                }
+                _withHeld = null; _heldVersion++;
+            }
+            item.IsPending = true;
+            PendingChanged();
+            Stepped(before);
+            StatusText = "";
+        }
+
+        /// <summary>The sound archive with the held imports in it, which plays until Save.</summary>
+        private SdatArchive Archive()
+        {
+            List<SoundArchive.PendingSample> held;
+            int version;
+            lock (_heldLock)
+            {
+                if (_pendingSamples.Count == 0) return SoundArchive.Load();
+                if (_withHeld != null) return _withHeld;
+                held = _pendingSamples.Select(h => h.Sample).ToList();
+                version = _heldVersion;
+            }
+
+            // Built outside the lock: encoding takes long enough that the UI thread must not wait on it.
+            SdatArchive built = SoundArchive.WithSamples(held, out string problem);
+            if (built == null)
+            {
+                AppLogger.Error("Held sounds couldn't be previewed: " + problem);
+                return SoundArchive.Load();
+            }
+            lock (_heldLock) if (version == _heldVersion) _withHeld = built;
+            return built;
+        }
+
+        /// <summary>
+        /// Writes everything held: the sound archive in one rewrite, then any checkout cries. Returns null, or why it
+        /// failed, with anything not written still held.
+        /// </summary>
+        public string Save()
+        {
+            if (!HasUnsavedChanges) return null;
+
+            List<HeldSample> samples;
+            lock (_heldLock) samples = _pendingSamples.ToList();
+            if (samples.Count > 0)
+            {
+                if (!SoundArchive.WriteSamples(samples.Select(h => h.Sample).ToList(), out string problem))
+                {
+                    PendingChanged();
+                    return problem;
+                }
+                lock (_heldLock) { _pendingSamples.Clear(); _withHeld = null; _heldVersion++; }
+                foreach (HeldSample h in samples) h.Item.IsPending = false;
+            }
+
+            bool wroteCheckout = false;
+            List<KeyValuePair<AudioItem, SoundArchive.PendingCry>> cries;
+            lock (_heldLock) cries = _pendingCries.ToList();
+            foreach (KeyValuePair<AudioItem, SoundArchive.PendingCry> kv in cries)
+            {
+                if (!SoundArchive.WriteCheckoutCry(kv.Value, out string problem))
+                {
+                    PendingChanged();
+                    return problem;
+                }
+                lock (_heldLock) _pendingCries.Remove(kv.Key);
+                kv.Key.IsPending = false;
+                wroteCheckout = true;
+            }
+            PendingChanged();
+            ForgetSteps();
+            StatusText = wroteCheckout ? "Saved. Compile the ROM to hear the new cries in game." : "Saved.";
+            return null;
+        }
+
+        public void SaveChanges() => Save();
+
+        public Task<bool> SaveChangesAsync()
+        {
+            string problem = Save();
+            return problem != null
+                ? Task.FromException<bool>(new InvalidOperationException(problem))
+                : Task.FromResult(!HasUnsavedChanges);
+        }
+
+        public void DiscardChanges()
+        {
+            List<AudioItem> items;
+            lock (_heldLock)
+            {
+                items = _pendingCries.Keys.Concat(_pendingSamples.Select(h => h.Item)).ToList();
+                _pendingCries.Clear();
+                _pendingSamples.Clear();
+                _withHeld = null; _heldVersion++;
+            }
+            foreach (AudioItem item in items) item.IsPending = false;
+            PendingChanged();
+            ForgetSteps();
+        }
+
+        private void PendingChanged()
+        {
+            OnPropertyChanged(nameof(HasUnsavedChanges));
+            OnPropertyChanged(nameof(SelectedDescription));
+        }
+
+        // ── doing something with it ─────────────────────────────────────────────────
+
+        /// <summary>The sound of whatever is picked, ready to play or save.</summary>
+        public short[] RenderSelected(int playAt = AudioOutput.RenderRate)
+        {
+            AudioItem item = Selected;
+            if (item == null) return null;
+
+            // A checkout cry only becomes part of the archive when the ROM is compiled, so the WAV itself
+            // is what can be heard before then.
+            if (item.IsCry && HeldCheckoutWav(item) is byte[] wav)
+            {
+                short[] pcm = CryFiles.ReadWav(wav, out int rate, out _);
+                return pcm == null ? null : Stereo(Resample(pcm, rate, playAt));
+            }
+
+            SdatArchive sdat = Archive();
+            if (item.IsCry) return SoundArchive.RenderCry(sdat, item.Number);
+
+            // A sound has no sequence to play it, so what is heard is the sample itself.
+            if (item.IsSample)
+            {
+                SwavSample s = SoundArchive.Sample(sdat, item.WaveArc, item.SampleIndex);
+                if (s?.Pcm == null || s.Pcm.Length == 0) return null;
+                return Stereo(Resample(s.Pcm, s.SampleRate, playAt));
+            }
+
+            return sdat == null ? null : SseqPlayer.Render(sdat, item.Number, playAt, PreviewSeconds);
+        }
+
+        private byte[] HeldCheckoutWav(AudioItem item)
+        {
+            lock (_heldLock) return _pendingCries.TryGetValue(item, out SoundArchive.PendingCry cry) ? cry.Wav : null;
+        }
+
+        /// <summary>Writes the picked cry or sound out as a WAV, as it will be once saved. False when there is
+        /// nothing there to write.</summary>
+        public bool ExportSelectedSample(string path)
+        {
+            AudioItem item = Selected;
+            if (item == null || !(item.IsCry || item.IsSample)) return false;
+
+            if (item.IsCry && HeldCheckoutWav(item) is byte[] wav)
+            {
+                PlainFiles.WriteBytes(path, wav);
+                return true;
+            }
+
+            SdatArchive sdat = Archive();
+            SwavSample sample = item.IsCry
+                ? SoundArchive.CrySample(sdat, item.Number)
+                : SoundArchive.Sample(sdat, item.WaveArc, item.SampleIndex);
+            if (sample?.Pcm == null || sample.Pcm.Length == 0) return false;
+            PlainFiles.WriteBytes(path, CryFiles.WriteWav(sample.Pcm, sample.SampleRate));
+            return true;
+        }
+
+        /// <summary>
+        /// How much of a tune to render for a listen. Long enough to get past an introduction and reach the
+        /// part somebody would recognise.
+        /// </summary>
+        public const double PreviewSeconds = 45.0;
+
+        /// <summary>The same sound in both channels, the format everything here plays, draws and saves.</summary>
+        private static short[] Stereo(short[] mono)
+        {
+            if (mono == null) return null;
+            short[] both = new short[mono.Length * 2];
+            for (int i = 0; i < mono.Length; i++) both[i * 2] = both[i * 2 + 1] = mono[i];
+            return both;
+        }
+
+        /// <summary>Stretches a sample to the rate the player runs at, so it sounds at its own pitch.</summary>
+        private static short[] Resample(short[] pcm, int from, int to)
+        {
+            if (from <= 0 || to <= 0 || from == to) return pcm;
+            long length = (long)pcm.Length * to / from;
+            if (length <= 0) return pcm;
+            short[] outp = new short[length];
+            for (int i = 0; i < outp.Length; i++)
+            {
+                double at = (double)i * from / to;
+                int a = (int)at;
+                int b = a + 1 < pcm.Length ? a + 1 : a;
+                double t = at - a;
+                outp[i] = (short)(pcm[a] + (pcm[b] - pcm[a]) * t);
+            }
+            return outp;
+        }
+
+        /// <summary>The selection's notes, for drawing and MIDI export; a cry is a recording, so it has none.</summary>
+        public System.Collections.Generic.IReadOnlyList<SseqPlayer.Note> ReadSelectedNotes()
+        {
+            AudioItem item = Selected;
+            // A sample's number is which set it lives in, not a sequence, so it must not be read as one.
+            if (item == null || item.IsCry || item.IsSample) return null;
+            SdatArchive sdat = SoundArchive.Load();
+            if (sdat == null) return null;
+            try { return SseqPlayer.ReadNotes(sdat, item.Number); } catch (Exception ex) { AppLogger.WarnOnce("AudioEditorViewModel.ReadSelectedNotes", ex); return null; }
+        }
+
+        /// <summary>How far into a sequence a saved MIDI reads.</summary>
+        internal const double WholeTuneSeconds = 3600.0;
+
+        public bool CanSaveMidi => Selected != null && !Selected.IsCry && !Selected.IsSample;
+
+        public string SaveMidiHelp => Selected == null
+            ? "Pick a piece of music, a fanfare or a sound effect first."
+            : Selected.IsSample
+                ? "This is a recorded sound, not notes, so it can't be saved as MIDI. Save it as a WAV instead."
+            : Selected.IsCry
+                ? "A cry is a recording, not notes, so it can't be saved as MIDI. Save it as a WAV instead."
+                : "Saves the notes as a MIDI for other music programs, with exact notes and timing. The game "
+                  + "plays them on samples a MIDI can't carry, so your program picks its own instruments; "
+                  + "save the SoundFont too and load both to hear it as the game does.";
+
+        // ── the instruments, as a SoundFont ─────────────────────────────────────────
+
+        /// <summary>The instrument bank the selection plays on.</summary>
+        public int BankOfSelection
+        {
+            get
+            {
+                AudioItem item = Selected;
+                if (item == null) return -1;
+                if (item.IsCry) return item.Number;             // a cry is listed by its own bank
+                if (item.IsSample) return -1;                   // one recording, not a set of instruments
+                SdatArchive sdat = SoundArchive.Load();
+                if (sdat == null || item.Number < 0 || item.Number >= sdat.Sequences.Count) return -1;
+                return sdat.Sequences[item.Number]?.BankNo ?? -1;
+            }
+        }
+
+        public bool CanSaveSoundFont => BankOfSelection >= 0;
+
+        public string SaveSoundFontHelp
+        {
+            get
+            {
+                AudioItem item = Selected;
+                if (item == null) return "Pick a cry, a piece of music, a fanfare or a sound effect first.";
+                if (item.IsSample)
+                    return "This is a single recording, so there is no bank to save. Save it as a WAV.";
+                if (BankOfSelection < 0)
+                    return "This doesn't say which bank of instruments it plays on, so there is nothing "
+                         + "to save.";
+                SdatArchive sdat = SoundArchive.Load();
+                string name = sdat != null && sdat.BankNames.TryGetValue(BankOfSelection, out string n)
+                              && !string.IsNullOrWhiteSpace(n) ? n : "bank " + BankOfSelection;
+                return $"Saves {name}, the instruments this plays on, as a SoundFont. Open it with the MIDI "
+                     + "to hear the game's own sounds.";
+            }
+        }
+
+        /// <summary>Builds a SoundFont from the selection's instrument bank, or says why it can't.</summary>
+        public byte[] BuildSoundFont(out string whynot, out string note)
+        {
+            whynot = null; note = null;
+            int bank = BankOfSelection;
+            if (bank < 0) { whynot = SaveSoundFontHelp; return null; }
+
+            SdatArchive sdat = Archive();
+            string name = sdat != null && sdat.BankNames.TryGetValue(bank, out string n)
+                          && !string.IsNullOrWhiteSpace(n) ? n : "Bank " + bank;
+            SoundFontWriter.Result made = SoundFontWriter.Build(sdat, bank, name);
+            if (made.Whynot != null) { whynot = made.Whynot; return null; }
+            note = made.Summary + " " + string.Join(" ", made.Notes);
+            return made.Bytes;
+        }
+
+        /// <summary>A sensible name for the file, from what the game calls the bank.</summary>
+        public string SuggestedSoundFontName()
+        {
+            int bank = BankOfSelection;
+            SdatArchive sdat = SoundArchive.Load();
+            string name = sdat != null && sdat.BankNames.TryGetValue(bank, out string n)
+                          && !string.IsNullOrWhiteSpace(n) ? n : "bank" + bank;
+            return new string(name.Where(c => char.IsLetterOrDigit(c) || c == '_').ToArray()) + ".sf2";
+        }
+
+        /// <summary>Turns what is picked into a MIDI, or says why it cannot.</summary>
+        public byte[] BuildMidi(out string whynot)
+        {
+            whynot = null;
+            AudioItem item = Selected;
+            if (item == null) { whynot = "Pick something first."; return null; }
+            if (item.IsCry) { whynot = SaveMidiHelp; return null; }
+
+            // The preview only renders the first few seconds, which is all anyone wants to hear before
+            // deciding. A file is different: it should hold the whole tune, so this reads much further.
+            SdatArchive sdat = SoundArchive.Load();
+            if (sdat == null) { whynot = "This game's sound archive couldn't be read."; return null; }
+            System.Collections.Generic.IReadOnlyList<SseqPlayer.Note> notes;
+            try { notes = SseqPlayer.ReadNotes(sdat, item.Number, WholeTuneSeconds); }
+            catch (Exception ex) { AppLogger.WarnOnce("AudioEditorViewModel.BuildMidi", ex); notes = null; }
+            if (notes == null) { whynot = "This sequence couldn't be read."; return null; }
+            if (notes.Count == 0) { whynot = "This sequence plays no notes, so a MIDI of it would be empty."; return null; }
+            byte[] midi = MidiFile.FromNotes(notes, item.Name);
+            if (midi == null) { whynot = "This sequence couldn't be turned into a MIDI."; return null; }
+            return midi;
+        }
+
+        public string SuggestedMidiName()
+        {
+            string wav = SuggestedFileName();
+            return wav.EndsWith(".wav", System.StringComparison.OrdinalIgnoreCase)
+                ? wav.Substring(0, wav.Length - 4) + ".mid" : wav + ".mid";
+        }
+
+        /// <summary>A sensible file name for saving what is picked.</summary>
+        public string SuggestedFileName()
+        {
+            AudioItem item = Selected;
+            if (item == null) return "sound.wav";
+            string name = item.Name;
+            int space = name.IndexOf(' ');
+            if (item.IsCry && space > 0) name = name.Substring(space + 1).Trim();
+            foreach (char c in System.IO.Path.GetInvalidFileNameChars()) name = name.Replace(c, '_');
+            return item.IsCry ? $"cry_{item.Number:D3}_{name}.wav" : $"{name}.wav";
+        }
+    }
+}

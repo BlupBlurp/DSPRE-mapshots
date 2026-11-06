@@ -1,0 +1,147 @@
+<Window MinWidth="760" MinHeight="520" xmlns="https://github.com/avaloniaui"
+        xmlns:controls="clr-namespace:DSPRE.Avalonia.Controls"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:DSPRE.Avalonia.ViewModels.Audio"
+        xmlns:views="clr-namespace:DSPRE.Avalonia.Views.Controls"
+        x:Class="DSPRE.Avalonia.Views.Audio.AudioEditorView"
+        x:DataType="vm:AudioEditorViewModel"
+        Title="Audio editor"
+        Width="860" Height="700"
+        WindowStartupLocation="CenterScreen">
+  <Design.DataContext>
+    <vm:AudioEditorViewModel/>
+  </Design.DataContext>
+
+  <!-- The Music, Sound effects and Sounds trees: a bold group with its count, then its items. -->
+  <Window.Styles>
+    <Style Selector="TreeViewItem">
+      <Setter Property="IsExpanded" Value="{ReflectionBinding IsExpanded, Mode=TwoWay}"/>
+    </Style>
+  </Window.Styles>
+  <Window.DataTemplates>
+    <TreeDataTemplate DataType="vm:AudioGroup" ItemsSource="{Binding Items}">
+      <StackPanel Orientation="Horizontal" Spacing="6">
+        <TextBlock Text="{Binding Name}" FontWeight="SemiBold"/>
+        <TextBlock Text="{Binding Count}" Foreground="{DynamicResource Editor.Subtle}"/>
+      </StackPanel>
+    </TreeDataTemplate>
+  </Window.DataTemplates>
+
+  <DockPanel>
+    <controls:EditorToolbar>
+        <StackPanel x:Name="SaveButtons" controls:EditorToolbar.Slot="Save" Orientation="Horizontal" Spacing="6">
+          <Button Content="Save" controls:Icon.Key="saveButton" Click="Save_Click"
+                  IsEnabled="{Binding HasUnsavedChanges}" ToolTip.Tip="Write what was imported."/>
+          <Button Content="Discard" controls:Icon.Key="resetIcon" Click="Discard_Click"
+                  IsEnabled="{Binding HasUnsavedChanges}" ToolTip.Tip="Forget what was imported."/>
+          <controls:UndoRedoButtons/>
+        </StackPanel>
+        <TextBox PlaceholderText="Search all tabs" x:Name="SearchBox" controls:EditorToolbar.Slot="Picker"
+                 Text="{Binding Search}" FontSize="13" Width="280" Margin="12,2,6,2">
+          <TextBox.InnerRightContent>
+            <Button controls:Icon.Key="Cross" Click="ClearSearch_Click" Padding="8,2" Margin="0,0,2,0"
+                    Background="Transparent" BorderThickness="0"
+                    ToolTip.Tip="Empty the search box"
+                    IsVisible="{Binding Search, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+          </TextBox.InnerRightContent>
+        </TextBox>
+        <StackPanel x:Name="AudioActions" Orientation="Horizontal" Spacing="6">
+          <Button Content="Export WAV…" controls:Icon.Key="export" Click="Export_Click" IsEnabled="{Binding CanPlay}"
+                  ToolTip.Tip="Save as a WAV, as it sounds when played."/>
+          <Button Content="Export MIDI…" controls:Icon.Key="export" Click="ExportMidi_Click" IsEnabled="{Binding CanSaveMidi}"
+                  ToolTip.Tip="{Binding SaveMidiHelp}"/>
+          <Button Content="Export SoundFont…" controls:Icon.Key="export" Click="ExportSoundFont_Click"
+                  IsEnabled="{Binding CanSaveSoundFont}" ToolTip.Tip="{Binding SaveSoundFontHelp}"/>
+          <Button Content="Import…" controls:Icon.Key="import" Click="Import_Click" IsEnabled="{Binding CanImport}"
+                  ToolTip.Tip="{Binding ImportHelp}"/>
+        </StackPanel>
+    </controls:EditorToolbar>
+
+    <Border DockPanel.Dock="Bottom" Padding="8,6" Background="{DynamicResource Editor.StatusBg}">
+      <StackPanel Spacing="6">
+
+        <Border BorderBrush="{DynamicResource Editor.Border}" BorderThickness="1"
+                Background="{DynamicResource Editor.PanelBg}" Height="118">
+          <views:NoteTrackView x:Name="Notes"
+                               PointerPressed="Notes_PointerPressed"
+                               ToolTip.Tip="Click anywhere to play from there."/>
+        </Border>
+
+        <Border BorderBrush="{DynamicResource Editor.Border}" BorderThickness="1"
+                Background="{DynamicResource Editor.PanelBg}" Height="88">
+          <views:WaveformView x:Name="Wave"
+                              WaveBrush="{DynamicResource Editor.Subtle}"
+                              PointerPressed="Wave_PointerPressed"
+                              ToolTip.Tip="The two channels, loudest to quietest. Click anywhere to play from there."/>
+        </Border>
+
+        <Grid x:Name="PlayBar" ColumnDefinitions="Auto,6,Auto,10,Auto,12,Auto,*">
+          <Button Grid.Column="0" Content="Play" controls:Icon.Key="play" Click="Play_Click" MinWidth="86" IsEnabled="{Binding CanPlay}"
+                  ToolTip.Tip="Space plays or stops, Enter plays from the start"/>
+          <Button Grid.Column="2" x:Name="StopButton" Content="Stop" controls:Icon.Key="stop" Click="Stop_Click" MinWidth="86" IsEnabled="False"/>
+          <CheckBox Grid.Column="4" x:Name="LoopBox" Content="Loop"
+                    ToolTip.Tip="Keep playing it round until you press Stop."/>
+          <TextBlock Grid.Column="6" x:Name="TimeText" Text="0:00.0 / 0:00.0" VerticalAlignment="Center"
+                     FontFamily="Consolas,monospace" FontSize="12"
+                     Foreground="{DynamicResource Editor.Subtle}"/>
+          <TextBlock Grid.Column="7" Margin="14,0,0,0" Text="{Binding SelectedDescription}"
+                     VerticalAlignment="Center" FontSize="12" TextWrapping="Wrap"/>
+        </Grid>
+
+        <StackPanel Spacing="2">
+          <TextBlock Text="{Binding StatusText}" FontSize="11" TextWrapping="Wrap"
+                     Foreground="{DynamicResource Editor.Subtle}"/>
+          <TextBlock Text="{Binding FoundSummary}" FontSize="11" TextWrapping="Wrap"
+                     Foreground="{DynamicResource Editor.Subtle}"/>
+        </StackPanel>
+      </StackPanel>
+    </Border>
+
+    <TabControl x:Name="Tabs" Margin="6" SelectedIndex="{Binding SelectedTab}">
+      <TabItem Header="Cries">
+        <ListBox ItemsSource="{Binding Cries}" SelectedItem="{Binding SelectedCry}"
+                 DoubleTapped="List_DoubleTapped">
+          <ListBox.ItemTemplate>
+            <DataTemplate><TextBlock Text="{Binding Label}" FontFamily="Consolas,monospace" FontSize="13"/></DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
+      </TabItem>
+      <TabItem Header="Music">
+        <TreeView ItemsSource="{Binding MusicBanks}" SelectedItem="{Binding SelectedMusicNode, Mode=TwoWay}"
+                  DoubleTapped="List_DoubleTapped">
+          <TreeView.DataTemplates>
+            <DataTemplate DataType="vm:AudioItem"><TextBlock Text="{Binding Label}" FontFamily="Consolas,monospace" FontSize="13"/></DataTemplate>
+          </TreeView.DataTemplates>
+        </TreeView>
+      </TabItem>
+      <TabItem Header="Fanfares">
+        <ListBox ItemsSource="{Binding Fanfares}" SelectedItem="{Binding SelectedFanfare}"
+                 DoubleTapped="List_DoubleTapped">
+          <ListBox.ItemTemplate>
+            <DataTemplate><TextBlock Text="{Binding Label}" FontFamily="Consolas,monospace" FontSize="13"/></DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
+      </TabItem>
+      <TabItem Header="Sound effects">
+        <DockPanel>
+          <CheckBox DockPanel.Dock="Top" Content="Can play in overworld" IsChecked="{Binding OverworldOnly}" Margin="0,0,0,6"/>
+          <TreeView ItemsSource="{Binding EffectBanks}" SelectedItem="{Binding SelectedEffectNode, Mode=TwoWay}"
+                    DoubleTapped="List_DoubleTapped">
+            <TreeView.DataTemplates>
+              <DataTemplate DataType="vm:AudioItem"><TextBlock Text="{Binding Label}" FontFamily="Consolas,monospace" FontSize="13"/></DataTemplate>
+            </TreeView.DataTemplates>
+          </TreeView>
+        </DockPanel>
+      </TabItem>
+      <TabItem Header="Sounds"
+               ToolTip.Tip="The sounds music and sound effects are made of.">
+        <TreeView ItemsSource="{Binding SoundSets}" SelectedItem="{Binding SelectedSoundNode, Mode=TwoWay}"
+                  DoubleTapped="List_DoubleTapped">
+          <TreeView.DataTemplates>
+            <DataTemplate DataType="vm:AudioItem"><TextBlock Text="{Binding Label}" FontFamily="Consolas,monospace" FontSize="13"/></DataTemplate>
+          </TreeView.DataTemplates>
+        </TreeView>
+      </TabItem>
+    </TabControl>
+  </DockPanel>
+</Window>

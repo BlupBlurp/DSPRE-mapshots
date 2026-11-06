@@ -1,0 +1,490 @@
+using System;
+using System.Collections.Specialized;
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
+using Avalonia.Input;
+using Avalonia.Interactivity;
+using Avalonia.Threading;
+
+namespace DSPRE.Avalonia.Controls
+{
+    /// <summary>
+    /// An editable, searchable selector with Qt Fusion's combo-box interaction model.
+    /// Text is only committed when it identifies an item in ItemsSource.
+    /// </summary>
+    public class FusionAutoCompleteBox : AutoCompleteBox
+    {
+        public static readonly StyledProperty<int> SelectedIndexProperty =
+            AvaloniaProperty.Register<FusionAutoCompleteBox, int>(
+                nameof(SelectedIndex),
+                -1,
+                defaultBindingMode: global::Avalonia.Data.BindingMode.TwoWay);
+
+        /// <summary>False where "nothing" isn't a valid choice: clearing the box then puts the last item back.</summary>
+        public static readonly StyledProperty<bool> AllowsNoneProperty =
+            AvaloniaProperty.Register<FusionAutoCompleteBox, bool>(nameof(AllowsNone), true);
+
+        public bool AllowsNone
+        {
+            get => GetValue(AllowsNoneProperty);
+            set => SetValue(AllowsNoneProperty, value);
+        }
+
+        private bool _editingText;
+        private bool _showAllItems;
+        private bool _refreshingDropDown;
+        private bool _textChangedSinceLastOpen;
+        private bool _selectionPending;
+        private bool _anyContainsText;
+        private object _lastCommittedItem;
+        private INotifyCollectionChanged _itemsSourceCollection;
+        private SelectingItemsControl _list;
+
+        static FusionAutoCompleteBox()
+        {
+            SelectedIndexProperty.Changed.AddClassHandler<FusionAutoCompleteBox>(
+                (control, _) => control.ApplySelectedIndex());
+        }
+
+        public FusionAutoCompleteBox()
+        {
+            MinimumPrefixLength = 0;
+            IsTextCompletionEnabled = false;
+            TextFilter = FilterText;
+            // Only the user's own edits filter the list, not a name the editor sets while the box has focus.
+            AddHandler(TextInputEvent, (_, _) => _userEdit = true, RoutingStrategies.Tunnel, handledEventsToo: true);
+            AddHandler(KeyDownEvent, (_, e) =>
+            {
+                if (e.Key is Key.Back or Key.Delete
+                    || (e.KeyModifiers.HasFlag(KeyModifiers.Control) && e.Key is Key.V or Key.X))
+                    _userEdit = true;
+            }, RoutingStrategies.Tunnel, handledEventsToo: true);
+        }
+
+        private bool _userEdit;
+
+        /// <summary>
+        /// Gets or sets the zero-based item index. This mirrors ComboBox.SelectedIndex so existing
+        /// DSPRE view models can adopt the searchable control without a second selection property.
+        /// </summary>
+        public int SelectedIndex
+        {
+            get => GetValue(SelectedIndexProperty);
+            set => SetValue(SelectedIndexProperty, value);
+        }
+
+        protected override void OnApplyTemplate(TemplateAppliedEventArgs e)
+        {
+            base.OnApplyTemplate(e);
+            _list = e.NameScope.Find<SelectingItemsControl>("PART_SelectingItemsControl");
+        }
+
+        protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
+        {
+            base.OnPropertyChanged(change);
+
+            if (change.Property == SelectedItemProperty)
+            {
+                OnSelectedItemChanged(change.GetNewValue<object>());
+            }
+            else if (change.Property == ItemsSourceProperty)
+            {
+                UpdateItemsSourceCollectionSubscription();
+
+                if (_lastCommittedItem != null && FindItemIndex(_lastCommittedItem) < 0)
+                {
+                    _lastCommittedItem = null;
+                }
+
+                ApplySelectedIndex();
+            }
+            else if (change.Property == IsDropDownOpenProperty)
+            {
+                OnDropDownStateChanged(change.GetNewValue<bool>());
+            }
+        }
+
+        private void UpdateItemsSourceCollectionSubscription()
+        {
+            INotifyCollectionChanged collection = ItemsSource as INotifyCollectionChanged;
+            if (ReferenceEquals(collection, _itemsSourceCollection))
+            {
+                return;
+            }
+
+            if (_itemsSourceCollection != null)
+            {
+                _itemsSourceCollection.CollectionChanged -= OnItemsSourceCollectionChanged;
+            }
+
+            _itemsSourceCollection = collection;
+            if (_itemsSourceCollection != null)
+            {
+                _itemsSourceCollection.CollectionChanged += OnItemsSourceCollectionChanged;
+            }
+        }
+
+        private void OnItemsSourceCollectionChanged(object sender, NotifyCollectionChangedEventArgs e)
+        {
+            ApplySelectedIndex();
+        }
+
+        protected override void OnTextChanged(TextChangedEventArgs e)
+        {
+            bool matchesSelectedItem = SelectedItem != null &&
+                string.Equals(Text, FormatValue(SelectedItem), StringComparison.OrdinalIgnoreCase);
+
+            if (!matchesSelectedItem && IsKeyboardFocusWithin && _userEdit)
+            {
+                _editingText = true;
+                _showAllItems = false;
+                _textChangedSinceLastOpen = true;
+                _anyContainsText = AnyItemContains(Text);
+                SetCurrentValue(TextFilterProperty, FilterText);
+            }
+            _userEdit = false;
+
+            base.OnTextChanged(e);
+        }
+
+        protected override void OnKeyDown(KeyEventArgs e)
+        {
+            base.OnKeyDown(e);
+
+            if (e.Key == Key.Enter || e.Key == Key.Escape)
+            {
+                CommitText(e.Key == Key.Enter);
+                e.Handled = true;
+            }
+        }
+
+        protected override void OnLostFocus(FocusChangedEventArgs e)
+        {
+            base.OnLostFocus(e);
+            CommitText();
+        }
+
+        protected override void OnPointerWheelChanged(PointerWheelEventArgs e)
+        {
+            base.OnPointerWheelChanged(e);
+
+            if (e.Handled || IsDropDownOpen || !IsKeyboardFocusWithin || ItemsSource == null)
+            {
+                return;
+            }
+
+            int step = e.Delta.Y < 0 ? 1 : e.Delta.Y > 0 ? -1 : 0;
+            if (step == 0)
+            {
+                return;
+            }
+
+            int itemCount = 0;
+            foreach (object item in ItemsSource)
+            {
+                itemCount++;
+            }
+
+            int nextIndex = SelectedIndex < 0 && step > 0
+                ? 0
+                : SelectedIndex + step;
+            if (nextIndex < 0 || nextIndex >= itemCount || nextIndex == SelectedIndex)
+            {
+                return;
+            }
+
+            SetCurrentValue(SelectedIndexProperty, nextIndex);
+            e.Handled = true;
+        }
+
+        private void OnSelectedItemChanged(object item)
+        {
+            // AutoCompleteBox selects an item as soon as the typed text equals it, so "Mew" would load on
+            // the way to "Mewtwo". Hold it until the edit is committed or the list closes.
+            if (item != null && _editingText && IsDropDownOpen)
+            {
+                _selectionPending = true;
+                return;
+            }
+
+            if (item != null)
+            {
+                _lastCommittedItem = item;
+                _editingText = false;
+
+                int index = FindItemIndex(item);
+                if (index >= 0 && index != SelectedIndex)
+                {
+                    SetCurrentValue(SelectedIndexProperty, index);
+                }
+            }
+            // AutoCompleteBox clears SelectedItem while the user has only typed a prefix. Keep the
+            // index and last committed value until CommitText decides whether that edit is valid.
+        }
+
+        private void ApplyPendingSelection()
+        {
+            if (!_selectionPending)
+            {
+                return;
+            }
+
+            _selectionPending = false;
+            _editingText = false;
+            OnSelectedItemChanged(SelectedItem);
+        }
+
+        private void ApplySelectedIndex()
+        {
+            int index = SelectedIndex;
+            object item = GetItemAt(index);
+
+            if (item == null)
+            {
+                if (index < 0)
+                {
+                    _lastCommittedItem = null;
+                    // Cleared from outside, so the box must not keep showing an old pick or search.
+                    if (!_editingText && !IsKeyboardFocusWithin && !string.IsNullOrEmpty(Text)) SetCurrentValue(TextProperty, string.Empty);
+                }
+
+                if (index < 0 && SelectedItem != null)
+                {
+                    SetCurrentValue(SelectedItemProperty, null);
+                }
+
+                return;
+            }
+
+            if (!ReferenceEquals(SelectedItem, item))
+            {
+                SetCurrentValue(SelectedItemProperty, item);
+            }
+        }
+
+        private void OnDropDownStateChanged(bool isOpen)
+        {
+            if (!isOpen)
+            {
+                ApplyPendingSelection();
+
+                if (!_refreshingDropDown)
+                {
+                    _showAllItems = false;
+                    _textChangedSinceLastOpen = false;
+                    SetCurrentValue(TextFilterProperty, FilterText);
+                }
+
+                return;
+            }
+
+            if (_refreshingDropDown || _textChangedSinceLastOpen)
+            {
+                _textChangedSinceLastOpen = false;
+                return;
+            }
+
+            // AutoCompleteBox normally populates only after text changes. The arrow must also make
+            // the complete source list available, including when the current text is already a
+            // selected item's full name.
+            _showAllItems = true;
+            SetCurrentValue(TextFilterProperty, FilterText);
+            _refreshingDropDown = true;
+            PopulateComplete();
+            SetCurrentValue(IsDropDownOpenProperty, true);
+            _refreshingDropDown = false;
+
+            // Open on the current entry, not the top of a long list.
+            object current = SelectedItem;
+            if (current != null && _list != null)
+                Dispatcher.UIThread.Post(() => { if (IsDropDownOpen) _list.ScrollIntoView(current); }, DispatcherPriority.Background);
+        }
+
+        private void CommitText(bool entered = false)
+        {
+            ApplyPendingSelection();
+
+            if (SelectedItem != null && FindItemIndex(SelectedItem) >= 0)
+            {
+                _lastCommittedItem = SelectedItem;
+                _editingText = false;
+                return;
+            }
+
+            string text = Text ?? string.Empty;
+            object exactItem = FindExactItem(text) ?? (entered ? FindTypedItem(text) : null);
+
+            if (exactItem != null)
+            {
+                SetCurrentValue(SelectedItemProperty, exactItem);
+            }
+            else if (text.Length == 0 && !AllowsNone && _lastCommittedItem != null && FindItemIndex(_lastCommittedItem) >= 0)
+            {
+                SetCurrentValue(SelectedItemProperty, _lastCommittedItem);
+                SetCurrentValue(TextProperty, FormatValue(_lastCommittedItem));
+            }
+            else if (text.Length == 0)
+            {
+                SetCurrentValue(SelectedItemProperty, null);
+                SetCurrentValue(SelectedIndexProperty, -1);
+                _lastCommittedItem = null;
+            }
+            else if (_lastCommittedItem != null && FindItemIndex(_lastCommittedItem) >= 0)
+            {
+                SetCurrentValue(SelectedItemProperty, _lastCommittedItem);
+            }
+            else
+            {
+                SetCurrentValue(TextProperty, string.Empty);
+                SetCurrentValue(SelectedItemProperty, null);
+                SetCurrentValue(SelectedIndexProperty, -1);
+                _lastCommittedItem = null;
+            }
+
+            _editingText = false;
+        }
+
+        private bool FilterText(string searchText, string itemText)
+        {
+            if (_showAllItems || string.IsNullOrWhiteSpace(searchText))
+            {
+                return true;
+            }
+
+            if (string.IsNullOrEmpty(itemText) || global::DSPRE.SearchMatch.Contains(itemText, searchText.Trim()))
+            {
+                return !string.IsNullOrEmpty(itemText);
+            }
+
+            // Near misses only help when nothing holds the text, or "729" would list 29, 72 and 79 above it.
+            if (_anyContainsText)
+            {
+                return false;
+            }
+
+            return global::DSPRE.SearchMatch.NearMiss(itemText, searchText);
+        }
+
+        private bool AnyItemContains(string text)
+        {
+            if (ItemsSource == null || string.IsNullOrWhiteSpace(text))
+            {
+                return false;
+            }
+
+            string query = text.Trim();
+            foreach (object item in ItemsSource)
+            {
+                string itemText = FormatValue(item);
+                if (!string.IsNullOrEmpty(itemText) && global::DSPRE.SearchMatch.Contains(itemText, query))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private object GetItemAt(int index)
+        {
+            if (index < 0 || ItemsSource == null)
+            {
+                return null;
+            }
+
+            int currentIndex = 0;
+            foreach (object item in ItemsSource)
+            {
+                if (currentIndex++ == index)
+                {
+                    return item;
+                }
+            }
+
+            return null;
+        }
+
+        private int FindItemIndex(object target)
+        {
+            if (target == null || ItemsSource == null)
+            {
+                return -1;
+            }
+
+            int index = 0;
+            foreach (object item in ItemsSource)
+            {
+                if (ReferenceEquals(item, target) || Equals(item, target))
+                {
+                    return index;
+                }
+
+                index++;
+            }
+
+            return -1;
+        }
+
+        // Enter on a typed name with nothing highlighted: the item that name can only mean, or none.
+        private object FindTypedItem(string text)
+        {
+            string query = text.Trim();
+            if (ItemsSource == null || query.Length == 0)
+            {
+                return null;
+            }
+
+            object named = null, containing = null;
+            int namedCount = 0, containingCount = 0;
+            foreach (object item in ItemsSource)
+            {
+                string value = FormatValue(item);
+                if (string.IsNullOrEmpty(value))
+                {
+                    continue;
+                }
+
+                if (string.Equals(LeadingNumber.Replace(value, ""), query, StringComparison.OrdinalIgnoreCase))
+                {
+                    named = item;
+                    namedCount++;
+                }
+
+                if (global::DSPRE.SearchMatch.Contains(value, query))
+                {
+                    containing = item;
+                    containingCount++;
+                }
+            }
+
+            if (namedCount == 1)
+            {
+                return named;
+            }
+
+            return namedCount == 0 && containingCount == 1 ? containing : null;
+        }
+
+        private static readonly System.Text.RegularExpressions.Regex LeadingNumber =
+            new System.Text.RegularExpressions.Regex(@"^\s*(\[\d+\]|#?\d+)\s*[-:]?\s*");
+
+        private object FindExactItem(string text)
+        {
+            if (ItemsSource == null)
+            {
+                return null;
+            }
+
+            foreach (object item in ItemsSource)
+            {
+                if (string.Equals(FormatValue(item), text, StringComparison.OrdinalIgnoreCase))
+                {
+                    return item;
+                }
+            }
+
+            return null;
+        }
+    }
+}

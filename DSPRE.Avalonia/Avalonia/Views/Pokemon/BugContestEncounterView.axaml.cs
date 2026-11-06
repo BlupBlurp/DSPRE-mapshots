@@ -1,0 +1,29 @@
+using System.Threading.Tasks;
+using Avalonia.Controls;
+using Avalonia.Interactivity;
+using DSPRE.Avalonia.ViewModels;
+
+namespace DSPRE.Avalonia.Views.Pokemon
+{
+    public partial class BugContestEncounterView : UserControl
+    {
+        private BugContestEncounterViewModel VM => DataContext as BugContestEncounterViewModel;
+
+        public BugContestEncounterView()
+        {
+            InitializeComponent();
+        }
+
+        private void Save_Click(object sender, RoutedEventArgs e) => VM?.Save();
+        private async void Export_Click(object sender, RoutedEventArgs e) => await DialogHelper.GuardAsync(() => VM?.ExportAsync() ?? Task.CompletedTask, "The Bug Contest encounters weren't exported.", ErrorTitle);
+        private async void Import_Click(object sender, RoutedEventArgs e) => await DialogHelper.GuardAsync(() => VM?.ImportAsync() ?? Task.CompletedTask, "The Bug Contest encounters weren't imported.", ErrorTitle);
+        private void Locate_Click(object sender, RoutedEventArgs e) => VM?.Locate();
+
+        private const string ErrorTitle = "Special encounters editor";
+
+        private async void Discard_Click(object sender, RoutedEventArgs e)
+        {
+            if (await DialogHelper.ConfirmDiscardAsync(this)) (DataContext as DSPRE.Editors.IEditorWithUnsavedChanges)?.DiscardChanges();
+        }
+    }
+}

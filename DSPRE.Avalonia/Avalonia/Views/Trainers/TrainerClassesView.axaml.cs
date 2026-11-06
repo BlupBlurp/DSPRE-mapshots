@@ -1,0 +1,158 @@
+using System.Collections.Generic;
+using Avalonia.Controls;
+using Avalonia.Interactivity;
+using DSPRE.Avalonia.ViewModels;
+
+namespace DSPRE.Avalonia.Views.Trainers
+{
+    public partial class TrainerClassesView : UserControl
+    {
+        private TrainerClassesViewModel VM => DataContext as TrainerClassesViewModel;
+
+        public TrainerClassesView()
+        {
+            InitializeComponent();
+            DataContextChanged += (_, _) => VM?.ClassList.KeepInView(ClassList);
+            AttachedToVisualTree += (_, _) => VM?.Attach();
+            DetachedFromVisualTree += (_, _) => VM?.Detach();
+        }
+
+        public TrainerClassesView(TrainerClassesViewModel vm) : this()
+        {
+            DataContext = vm;
+        }
+
+        private void Save_Click(object sender, RoutedEventArgs e) => VM?.Save();
+
+        private async void Discard_Click(object sender, RoutedEventArgs e)
+        {
+            if (await DialogHelper.ConfirmDiscardAsync(this)) VM?.DiscardChanges();
+        }
+
+        private void TogglePlay_Click(object sender, RoutedEventArgs e) => VM?.TogglePlay();
+        private void PlayMain_Click(object sender, RoutedEventArgs e) => VM?.PlayMusic(0);
+        private void PlayAlt_Click(object sender, RoutedEventArgs e) => VM?.PlayMusic(1);
+        private void PlayBattle_Click(object sender, RoutedEventArgs e) => VM?.PlayMusic(2);
+
+        private void ClassTrainer_DoubleTapped(object sender, global::Avalonia.Input.TappedEventArgs e)
+        {
+            if ((sender as ListBox)?.SelectedItem is TrainerClassesViewModel.ClassTrainer t) VM?.OpenTrainer?.Invoke(t.Id);
+        }
+
+        // Adds the entry with music = 0/0 so the Main/Alt fields can be set before Save writes it.
+        private async void EnableMusic_Click(object sender, RoutedEventArgs e)
+        {
+            if (VM == null) return;
+            if (VM.MusicNeedsExpansion && !DSPRE.TrainerClassTableExpansion.MusicTableHasRoom)
+            {
+                await PatchHandover.OfferAsync("trainerEncounterBgmRepointed", "Eye-contact music for this class", "Trainer classes");
+                return;
+            }
+            VM.EnableMusic(0, 0);
+        }
+
+        private void EditSprite_Click(object sender, RoutedEventArgs e)
+        {
+            if (VM == null || VM.SelectedClassIndex < 0 || !VM.CanEditSprite) return;
+            TrainerClassesViewModel classesVm = VM;
+            AvaloniaEditorLauncher.OpenTrainerSpriteEditor(VM.SelectedClassIndex, () => classesVm.RefreshSpritePreview());
+        }
+
+        private async void PatchNotes_Click(object sender, RoutedEventArgs e)
+        {
+            DSPRE.PatchToolboxLogic.PatchInfo patch = new()
+            {
+                Key = "trainerClassMetadata", Title = "Trainer class metadata", State = DSPRE.PatchToolboxLogic.PatchState.Applied,
+            };
+            await DialogHelper.ShowInfoAsync(DSPRE.PatchNotes.For(patch), patch.Title);
+        }
+
+        private async void CiPatchNotes_Click(object sender, RoutedEventArgs e)
+        {
+            DSPRE.PatchToolboxLogic.PatchInfo patch = new()
+            {
+                Key = "classIntros", Title = "Trainer class intros", State = DSPRE.PatchToolboxLogic.PatchState.Applied,
+            };
+            await DialogHelper.ShowInfoAsync(DSPRE.PatchNotes.For(patch), patch.Title);
+        }
+
+        private void EditIntro_Click(object sender, RoutedEventArgs e)
+        {
+            if (VM != null && VM.SelectedClassIndex >= 0) AvaloniaEditorLauncher.OpenVsIntroEditor(VM.SelectedClassIndex);
+        }
+
+        private async void CopyClass_Click(object sender, RoutedEventArgs e)
+        {
+            if (VM == null || VM.SelectedClassIndex < 0) return;
+            if (!await VM.ConfirmLeaveAsync()) return;
+            string error = VM.CopySelectedClass();
+            if (error != null) await DialogHelper.ShowErrorAsync(error, "Copy class");
+        }
+
+        private async void RemoveLastClass_Click(object sender, RoutedEventArgs e)
+        {
+            if (VM == null || VM.LastClassIndex < 1) return;
+            if (!await VM.ConfirmLeaveAsync()) return;
+            int last = VM.LastClassIndex;
+            string error = null;
+            List<DSPRE.ROMFiles.TrainerReference> uses = null;
+            TrainerClassesViewModel vm = VM;
+            await BusyOverlay.RunAsync($"Checking class {last}",
+                "Looking for trainers, events, scripts, rematches and Battle Tower trainers that use it.",
+                () => uses = vm.LastClassUses(out error), TopLevel.GetTopLevel(this) as Window);
+            if (uses == null) { await DialogHelper.ShowErrorAsync(error, "Trainer editor"); return; }
+            if (uses.Count > 0)
+            {
+                await DialogHelper.ShowErrorAsync($"Class {last} can't be removed while these use it:\n\n" +
+                    DSPRE.ROMFiles.TrainerClassDatasetManager.DescribeUses(uses), "Trainer editor");
+                return;
+            }
+            bool sure = await DialogHelper.AskYesNoAsync(
+                $"Remove class {last}? No trainer, event, script, rematch, phone contact or Battle Tower trainer uses it. " +
+                "Custom code isn't checked.", "Remove trainer class?");
+            if (!sure) return;
+            error = VM.RemoveLastClass();
+            if (error != null) await DialogHelper.ShowErrorAsync(error, "Trainer editor");
+        }
+
+        private async void AddTrainerClass_Click(object sender, RoutedEventArgs e)
+        {
+            if (VM == null) return;
+            if (!VM.CanAddClass)
+            {
+                await DialogHelper.ShowErrorAsync("Save or discard the new trainer class first.", "Add trainer class");
+                return;
+            }
+            // The new class is selected once it is added, so the loaded class is settled first.
+            if (!await VM.ConfirmLeaveAsync()) return;
+            bool hgEngine = DSPRE.HgEngine.HgEngineProject.IsActive;
+            if (!hgEngine && !DSPRE.TrainerClassTableExpansion.ClassTablesHaveRoom)
+            {
+                await PatchHandover.OfferAsync("trainerClassTablesExpanded", "A new trainer class", "Add trainer class");
+                return;
+            }
+
+            int newClassId = VM.NextClassId;
+            string refusal = hgEngine ? DSPRE.HgEngine.HgEngineTrainerClassExpansion.AddRefusal() : null;
+            if (refusal != null) { await DialogHelper.ShowErrorAsync(refusal, "Add trainer class"); return; }
+
+            AddTrainerClassViewModel dlgVm = new AddTrainerClassViewModel
+            {
+                ForHgEngine = hgEngine,
+                CanAddMusic = hgEngine || DSPRE.TrainerClassTableExpansion.MusicTableHasRoom,
+            };
+            dlgVm.SetSpriteChoices(VM.ClassNames, VM.SelectedClassIndex, newClassId, VM.NextClassHasSprite(newClassId));
+            AddTrainerClassView dlg = new AddTrainerClassView(dlgVm);
+            Window owner = TopLevel.GetTopLevel(this) as Window;
+            if (owner != null) await dlg.ShowDialog(owner);
+            else dlg.Show();
+
+            if (!dlgVm.Confirmed) return;
+
+            string error = VM.AddTrainerClass(dlgVm.ClassName, dlgVm.NameWithArticle, (byte)dlgVm.GenderIndex, (byte)dlgVm.PrizeMultiplier,
+                dlgVm.AddMusic, (ushort)dlgVm.MusicMain, 0, dlgVm.SpriteFrom);
+            if (error != null)
+                await DialogHelper.ShowErrorAsync(error, "Add trainer class");
+        }
+    }
+}

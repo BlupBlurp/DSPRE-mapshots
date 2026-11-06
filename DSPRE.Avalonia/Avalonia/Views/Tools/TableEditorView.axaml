@@ -1,0 +1,140 @@
+<Window MinWidth="600" MinHeight="420" xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="clr-namespace:DSPRE.Avalonia.Controls"
+        xmlns:vm="clr-namespace:DSPRE.Avalonia.ViewModels.Tools"
+        x:Class="DSPRE.Avalonia.Views.Tools.TableEditorView"
+        x:DataType="vm:TableEditorViewModel"
+        Title="Music &amp; battle tables"
+        Width="760" Height="560"
+        WindowStartupLocation="CenterScreen">
+
+  <Design.DataContext>
+    <vm:TableEditorViewModel/>
+  </Design.DataContext>
+
+  <DockPanel>
+
+    <Border DockPanel.Dock="Bottom" Background="{DynamicResource Editor.StatusBg}" BorderBrush="{DynamicResource Editor.Border}"
+            BorderThickness="0,1,0,0" Padding="8,3">
+      <TextBlock Text="{Binding StatusText}" FontSize="12" Foreground="{DynamicResource Editor.Subtle}"
+                 VerticalAlignment="Center"/>
+    </Border>
+
+    <controls:EditorToolbar IsVisible="{Binding !NoTablesAvailable}">
+        <Button Content="Save" controls:Icon.Key="saveButton" Click="Save_Click" IsEnabled="{Binding HasUnsavedChanges}"/>
+        <Button Content="Discard" controls:Icon.Key="resetIcon" Click="Discard_Click" IsEnabled="{Binding HasUnsavedChanges}"/>
+        <controls:UndoRedoButtons/>
+    </controls:EditorToolbar>
+
+    <Border DockPanel.Dock="Top" Padding="8,6" IsVisible="{Binding ShowIntroLinks}">
+      <StackPanel Orientation="Horizontal" Spacing="6">
+        <TextBlock Text="Battle intros and their music" VerticalAlignment="Center" Margin="0,0,6,0"/>
+        <Button Content="Open in VS intro editor" controls:Icon.Key="OpenLink" Click="OpenVsIntros_Click"/>
+        <Button Content="Open in wild Pokémon intro editor" controls:Icon.Key="OpenLink" Click="OpenWildIntros_Click"/>
+      </StackPanel>
+    </Border>
+
+    <!-- No tables for this ROM family -->
+    <TextBlock DockPanel.Dock="Top" Margin="16"
+               IsVisible="{Binding NoTablesAvailable}"
+               TextWrapping="Wrap"
+               Text="Not in this game"/>
+
+    <TabControl x:Name="Tabs" Margin="4" IsVisible="{Binding AnyTableShown}">
+
+      <TabItem Header="Conditional music" IsVisible="{Binding ShowConditionalMusic}">
+        <controls:CappedWidth Cap="900"><Grid ColumnDefinitions="*,260" Margin="4">
+          <ListBox Grid.Column="0"
+                   ItemsSource="{Binding CondMusicItems}"
+                   SelectedIndex="{Binding CondSelectedIndex}"/>
+          <StackPanel Grid.Column="1" Margin="8,0,0,0" Spacing="6">
+            <TextBlock Text="Header" FontWeight="Bold"/>
+            <controls:FusionAutoCompleteBox HorizontalAlignment="Stretch"
+                      ItemsSource="{Binding HeaderNames}"
+                      SelectedIndex="{Binding CondHeaderIndex}"/>
+            <TextBlock Text="Flag" FontWeight="Bold"/>
+            <NumericUpDown Minimum="0" Maximum="65535" Increment="1" Value="{Binding CondFlag}"/>
+            <TextBlock Text="Music" FontWeight="Bold"/>
+            <controls:FusionAutoCompleteBox HorizontalAlignment="Stretch"
+                      ItemsSource="{Binding MusicNames.Names}"
+                      SelectedIndex="{Binding CondMusicComboIndex}"
+                      PlaceholderText="Unnamed track"/>
+            <NumericUpDown Minimum="0" Maximum="65535" Increment="1" Value="{Binding CondMusic}"/>
+            <controls:HelpTip Text="While the flag is set, each listed header plays the chosen music."
+                              HorizontalAlignment="Left" Margin="0,8,0,0"/>
+          </StackPanel>
+        </Grid></controls:CappedWidth>
+      </TabItem>
+
+      <TabItem Header="Effect combos" IsVisible="{Binding ShowEffectsCombos}">
+        <controls:CappedWidth Cap="900"><Grid ColumnDefinitions="*,260" Margin="4">
+          <ListBox Grid.Column="0"
+                   ItemsSource="{Binding ComboItems}"
+                   SelectedIndex="{Binding ComboSelectedIndex}"/>
+          <StackPanel Grid.Column="1" Margin="8,0,0,0" Spacing="6">
+            <TextBlock Text="VS animation" FontWeight="Bold"/>
+            <NumericUpDown Minimum="0" Maximum="65535" Increment="1" Value="{Binding VsAnimation}"/>
+            <TextBlock Text="Battle music" FontWeight="Bold"/>
+            <NumericUpDown Minimum="0" Maximum="65535" Increment="1" Value="{Binding BattleSseq}"/>
+            <controls:HelpTip Text="Each entry pairs a VS animation with battle music."
+                              HorizontalAlignment="Left" Margin="0,8,0,0"/>
+          </StackPanel>
+        </Grid></controls:CappedWidth>
+      </TabItem>
+
+      <TabItem Header="VS trainer" IsVisible="{Binding ShowVsTables}">
+        <controls:CappedWidth Cap="900"><Grid ColumnDefinitions="*,260" Margin="4">
+          <ListBox Grid.Column="0"
+                   ItemsSource="{Binding VsTrainerItems}"
+                   SelectedIndex="{Binding VsTrainerSelectedIndex}"/>
+          <StackPanel Grid.Column="1" Margin="8,0,0,0" Spacing="6">
+            <TextBlock Text="Trainer class" FontWeight="Bold"/>
+            <controls:FusionAutoCompleteBox HorizontalAlignment="Stretch"
+                      ItemsSource="{Binding TrainerNames}"
+                      SelectedIndex="{Binding TrainerClassIndex}"/>
+            <TextBlock Text="Effect combo" FontWeight="Bold"/>
+            <ComboBox HorizontalAlignment="Stretch"
+                      ItemsSource="{Binding ComboItems}"
+                      SelectedIndex="{Binding TrainerComboIndex}"/>
+            <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,6,0,0">
+              <Border Background="{DynamicResource Editor.PanelBg}" BorderBrush="{DynamicResource Editor.Border}" BorderThickness="1" Width="80" Height="80">
+                <Image Source="{Binding TrainerSpriteImage}" Stretch="Uniform"/>
+              </Border>
+              <StackPanel Spacing="2" VerticalAlignment="Center" IsVisible="{Binding HasTrainerSprite}">
+                <TextBlock Text="Frame" FontSize="12"/>
+                <NumericUpDown Width="90" Minimum="0" Maximum="{Binding TrainerSpriteFrameMax}"
+                               Increment="1" Value="{Binding TrainerSpriteFrame}"/>
+              </StackPanel>
+            </StackPanel>
+            <controls:HelpTip Text="Every trainer of the class gets this combo's VS animation and music."
+                              HorizontalAlignment="Left" Margin="0,8,0,0"/>
+          </StackPanel>
+        </Grid></controls:CappedWidth>
+      </TabItem>
+
+      <TabItem Header="VS Pokémon" IsVisible="{Binding ShowVsTables}">
+        <controls:CappedWidth Cap="900"><Grid ColumnDefinitions="*,260" Margin="4">
+          <ListBox Grid.Column="0"
+                   ItemsSource="{Binding VsPokemonItems}"
+                   SelectedIndex="{Binding VsPokemonSelectedIndex}"/>
+          <StackPanel Grid.Column="1" Margin="8,0,0,0" Spacing="6">
+            <TextBlock Text="Pokémon" FontWeight="Bold"/>
+            <controls:FusionAutoCompleteBox controls:EditorLink.To="Pokemon" HorizontalAlignment="Stretch"
+                      ItemsSource="{Binding PokemonNames}"
+                      SelectedIndex="{Binding PokemonIndex}"/>
+            <TextBlock Text="Effect combo" FontWeight="Bold"/>
+            <ComboBox HorizontalAlignment="Stretch"
+                      ItemsSource="{Binding ComboItems}"
+                      SelectedIndex="{Binding PokemonComboIndex}"/>
+            <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,6,0,0" IsVisible="{Binding CanAddVsPokemonRows}">
+              <Button Content="Add row" controls:Icon.Key="addIcon" Click="AddVsPokemonRow_Click"/>
+              <Button Content="Remove row" controls:Icon.Key="deleteIcon" Click="RemoveVsPokemonRow_Click"/>
+            </StackPanel>
+            <controls:HelpTip Text="This wild Pokémon gets the combo's animation and music." HorizontalAlignment="Left" Margin="0,8,0,0"/>
+          </StackPanel>
+        </Grid></controls:CappedWidth>
+      </TabItem>
+
+    </TabControl>
+  </DockPanel>
+</Window>

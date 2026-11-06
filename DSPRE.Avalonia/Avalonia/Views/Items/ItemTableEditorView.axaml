@@ -1,0 +1,584 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="clr-namespace:DSPRE.Avalonia.Controls"
+        xmlns:vm="clr-namespace:DSPRE.Avalonia.ViewModels.Items"
+        x:Class="DSPRE.Avalonia.Views.Items.ItemTableEditorView"
+        x:DataType="vm:ItemTableEditorViewModel"
+        Title="Item tables (pickup, hidden, Rock Smash)"
+        Width="1340" Height="680"
+        MinWidth="760" MinHeight="500"
+        WindowStartupLocation="CenterScreen">
+  <Design.DataContext>
+    <vm:ItemTableEditorViewModel/>
+  </Design.DataContext>
+
+  <Window.Styles>
+    <!-- The pickup staircase: a range that reads the entry gets a tinted cell. -->
+    <Style Selector="Border.stair.used">
+      <Setter Property="Background" Value="#504A90E2"/>
+    </Style>
+  </Window.Styles>
+
+  <DockPanel>
+    <controls:EditorToolbar>
+        <Button x:Name="SaveButton" Content="Save" controls:Icon.Key="saveButton" Click="Save_Click" IsEnabled="{Binding HasUnsavedChanges}"/>
+        <Button Content="Discard" controls:Icon.Key="resetIcon" Click="Discard_Click" IsEnabled="{Binding HasUnsavedChanges}"/>
+        <controls:UndoRedoButtons/>
+    </controls:EditorToolbar>
+
+    <!-- Main content -->
+    <TabControl x:Name="Tabs" Margin="8">
+      <TabItem Header="Pickup" IsVisible="{Binding ShowPickupTab}">
+        <DockPanel Margin="4">
+          <StackPanel x:Name="PickupRate" DockPanel.Dock="Top" Orientation="Horizontal" Spacing="8" Margin="0,0,0,8">
+            <TextBlock Text="Pickup happens on 1 in" VerticalAlignment="Center"/>
+            <NumericUpDown Value="{Binding ActivationDivisorEdit}" Minimum="1" Maximum="255" FormatString="0" Width="110"
+                           ToolTip.Tip="Only when the Pokémon holds nothing"/>
+            <TextBlock Text="{Binding ActivationText}" VerticalAlignment="Center"/>
+            <ToggleButton x:Name="PickupViewToggle" Content="{Binding PickupViewLabel}" IsChecked="{Binding PickupListView}"
+                          IsVisible="{Binding ShowPickupViewToggle}" Margin="16,0,0,0"
+                          ToolTip.Tip="The game's own lists: each item once, with its chance at every level range"/>
+          </StackPanel>
+          <StackPanel DockPanel.Dock="Bottom" Spacing="4" Margin="0,8,0,0">
+            <TextBlock Text="{Binding PickupChanceNote}" TextWrapping="Wrap" FontSize="12" Foreground="{DynamicResource Editor.Subtle}"/>
+            <TextBlock Text="{Binding PickupLinkNote}" IsVisible="{Binding ShowPickupLinkNote}" TextWrapping="Wrap" FontSize="12" Foreground="{DynamicResource Editor.Warn}"/>
+          </StackPanel>
+          <Panel>
+          <ScrollViewer x:Name="PickupLists" IsVisible="{Binding PickupListView}" HorizontalScrollBarVisibility="Auto">
+            <StackPanel>
+              <TextBlock Text="Common items" FontWeight="SemiBold" Margin="0,8,0,4"/>
+              <Grid ColumnDefinitions="36,240,Auto" Margin="0,0,0,2">
+                <ItemsControl Grid.Column="2" ItemsSource="{Binding PickupRangeNames}">
+                  <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="x:String">
+                      <TextBlock Text="{Binding}" Width="72" TextAlignment="Center" FontSize="11" Foreground="{DynamicResource Editor.Subtle}"/>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </Grid>
+              <ItemsControl ItemsSource="{Binding PickupCommonEntries}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="vm:PickupEntryRow">
+                    <Grid ColumnDefinitions="36,240,Auto" Margin="0,1">
+                      <Image Width="32" Height="32" Source="{Binding Item, Converter={x:Static controls:GameIconConverter.Item}}"/>
+                      <controls:FusionAutoCompleteBox Grid.Column="1" ItemsSource="{Binding ItemNamesList}" SelectedIndex="{Binding Item}"
+                                AllowsNone="False" HorizontalAlignment="Stretch" FontSize="12"/>
+                      <ItemsControl Grid.Column="2" ItemsSource="{Binding Cells}">
+                        <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                          <DataTemplate x:DataType="vm:PickupStairCell">
+                            <Border Classes="stair" Classes.used="{Binding Used}" Width="72" Height="34"
+                                    BorderThickness="0,0,1,0" BorderBrush="{DynamicResource Editor.Border}">
+                              <TextBlock Text="{Binding Text}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                          </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                      </ItemsControl>
+                    </Grid>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+              <TextBlock Text="Rare items" FontWeight="SemiBold" Margin="0,8,0,4"/>
+              <Grid ColumnDefinitions="36,240,Auto" Margin="0,0,0,2">
+                <ItemsControl Grid.Column="2" ItemsSource="{Binding PickupRangeNames}">
+                  <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="x:String">
+                      <TextBlock Text="{Binding}" Width="72" TextAlignment="Center" FontSize="11" Foreground="{DynamicResource Editor.Subtle}"/>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </Grid>
+              <ItemsControl ItemsSource="{Binding PickupRareEntries}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="vm:PickupEntryRow">
+                    <Grid ColumnDefinitions="36,240,Auto" Margin="0,1">
+                      <Image Width="32" Height="32" Source="{Binding Item, Converter={x:Static controls:GameIconConverter.Item}}"/>
+                      <controls:FusionAutoCompleteBox Grid.Column="1" ItemsSource="{Binding ItemNamesList}" SelectedIndex="{Binding Item}"
+                                AllowsNone="False" HorizontalAlignment="Stretch" FontSize="12"/>
+                      <ItemsControl Grid.Column="2" ItemsSource="{Binding Cells}">
+                        <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                          <DataTemplate x:DataType="vm:PickupStairCell">
+                            <Border Classes="stair" Classes.used="{Binding Used}" Width="72" Height="34"
+                                    BorderThickness="0,0,1,0" BorderBrush="{DynamicResource Editor.Border}">
+                              <TextBlock Text="{Binding Text}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                          </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                      </ItemsControl>
+                    </Grid>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </StackPanel>
+          </ScrollViewer>
+          <DataGrid x:Name="PickupGrid" ItemsSource="{Binding PickupRows}" IsVisible="{Binding !PickupListView}"
+                    CanUserReorderColumns="False" CanUserResizeColumns="True" CanUserSortColumns="False"
+                    IsReadOnly="False" HorizontalScrollBarVisibility="Auto">
+            <DataGrid.Columns>
+              <DataGridTextColumn Header="Level range" Binding="{Binding LevelRange}" Width="110" MinWidth="110" IsReadOnly="True"/>
+              <DataGridTemplateColumn Width="*" MinWidth="230">
+                <DataGridTemplateColumn.Header>
+                  <Button Content="Slot 1" Tag="0" Click="PickupColumn_Click"
+                          ToolTip.Tip="Slot 1" Padding="6,2"/>
+                </DataGridTemplateColumn.Header>
+                <DataGridTemplateColumn.CellTemplate>
+                  <DataTemplate x:DataType="vm:PickupRangeRow">
+                    <Panel>
+                      <Panel IsVisible="{Binding IsChanceRow}">
+                        <StackPanel Orientation="Horizontal" Spacing="4" IsVisible="{Binding Open0}" VerticalAlignment="Center">
+                          <NumericUpDown Value="{Binding Chance0}" Minimum="0" Maximum="98" Increment="1" FormatString="0" Width="110"/>
+                          <TextBlock Text="%" VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <TextBlock Text="{Binding ChanceText0}" IsVisible="{Binding !Open0}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                      </Panel>
+                      <Panel IsVisible="{Binding IsItemRow}">
+                        <DockPanel IsVisible="{Binding Open0}">
+                          <Image DockPanel.Dock="Left" Width="32" Height="32" Margin="0,0,4,0" Source="{Binding Item0, Converter={x:Static controls:GameIconConverter.Item}}"/>
+                          <controls:FusionAutoCompleteBox ItemsSource="{Binding ItemNamesList}" SelectedIndex="{Binding Item0}"
+                                    AllowsNone="False" HorizontalAlignment="Stretch" FontSize="12"/>
+                        </DockPanel>
+                        <Image IsVisible="{Binding !Open0}" Width="32" Height="32" HorizontalAlignment="Center"
+                               ToolTip.Tip="{Binding Name0}" Source="{Binding Item0, Converter={x:Static controls:GameIconConverter.Item}}"/>
+                      </Panel>
+                    </Panel>
+                  </DataTemplate>
+                </DataGridTemplateColumn.CellTemplate>
+              </DataGridTemplateColumn>
+              <DataGridTemplateColumn Width="56" MinWidth="56">
+                <DataGridTemplateColumn.Header>
+                  <Button Content="2" Tag="1" Click="PickupColumn_Click"
+                          ToolTip.Tip="Slot 2" Padding="6,2"/>
+                </DataGridTemplateColumn.Header>
+                <DataGridTemplateColumn.CellTemplate>
+                  <DataTemplate x:DataType="vm:PickupRangeRow">
+                    <Panel>
+                      <Panel IsVisible="{Binding IsChanceRow}">
+                        <StackPanel Orientation="Horizontal" Spacing="4" IsVisible="{Binding Open1}" VerticalAlignment="Center">
+                          <NumericUpDown Value="{Binding Chance1}" Minimum="0" Maximum="98" Increment="1" FormatString="0" Width="110"/>
+                          <TextBlock Text="%" VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <TextBlock Text="{Binding ChanceText1}" IsVisible="{Binding !Open1}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                      </Panel>
+                      <Panel IsVisible="{Binding IsItemRow}">
+                        <DockPanel IsVisible="{Binding Open1}">
+                          <Image DockPanel.Dock="Left" Width="32" Height="32" Margin="0,0,4,0" Source="{Binding Item1, Converter={x:Static controls:GameIconConverter.Item}}"/>
+                          <controls:FusionAutoCompleteBox ItemsSource="{Binding ItemNamesList}" SelectedIndex="{Binding Item1}"
+                                    AllowsNone="False" HorizontalAlignment="Stretch" FontSize="12"/>
+                        </DockPanel>
+                        <Image IsVisible="{Binding !Open1}" Width="32" Height="32" HorizontalAlignment="Center"
+                               ToolTip.Tip="{Binding Name1}" Source="{Binding Item1, Converter={x:Static controls:GameIconConverter.Item}}"/>
+                      </Panel>
+                    </Panel>
+                  </DataTemplate>
+                </DataGridTemplateColumn.CellTemplate>
+              </DataGridTemplateColumn>
+              <DataGridTemplateColumn Width="56" MinWidth="56">
+                <DataGridTemplateColumn.Header>
+                  <Button Content="3" Tag="2" Click="PickupColumn_Click"
+                          ToolTip.Tip="Slot 3" Padding="6,2"/>
+                </DataGridTemplateColumn.Header>
+                <DataGridTemplateColumn.CellTemplate>
+                  <DataTemplate x:DataType="vm:PickupRangeRow">
+                    <Panel>
+                      <Panel IsVisible="{Binding IsChanceRow}">
+                        <StackPanel Orientation="Horizontal" Spacing="4" IsVisible="{Binding Open2}" VerticalAlignment="Center">
+                          <NumericUpDown Value="{Binding Chance2}" Minimum="0" Maximum="98" Increment="1" FormatString="0" Width="110"/>
+                          <TextBlock Text="%" VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <TextBlock Text="{Binding ChanceText2}" IsVisible="{Binding !Open2}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                      </Panel>
+                      <Panel IsVisible="{Binding IsItemRow}">
+                        <DockPanel IsVisible="{Binding Open2}">
+                          <Image DockPanel.Dock="Left" Width="32" Height="32" Margin="0,0,4,0" Source="{Binding Item2, Converter={x:Static controls:GameIconConverter.Item}}"/>
+                          <controls:FusionAutoCompleteBox ItemsSource="{Binding ItemNamesList}" SelectedIndex="{Binding Item2}"
+                                    AllowsNone="False" HorizontalAlignment="Stretch" FontSize="12"/>
+                        </DockPanel>
+                        <Image IsVisible="{Binding !Open2}" Width="32" Height="32" HorizontalAlignment="Center"
+                               ToolTip.Tip="{Binding Name2}" Source="{Binding Item2, Converter={x:Static controls:GameIconConverter.Item}}"/>
+                      </Panel>
+                    </Panel>
+                  </DataTemplate>
+                </DataGridTemplateColumn.CellTemplate>
+              </DataGridTemplateColumn>
+              <DataGridTemplateColumn Width="56" MinWidth="56">
+                <DataGridTemplateColumn.Header>
+                  <Button Content="4" Tag="3" Click="PickupColumn_Click"
+                          ToolTip.Tip="Slot 4" Padding="6,2"/>
+                </DataGridTemplateColumn.Header>
+                <DataGridTemplateColumn.CellTemplate>
+                  <DataTemplate x:DataType="vm:PickupRangeRow">
+                    <Panel>
+                      <Panel IsVisible="{Binding IsChanceRow}">
+                        <StackPanel Orientation="Horizontal" Spacing="4" IsVisible="{Binding Open3}" VerticalAlignment="Center">
+                          <NumericUpDown Value="{Binding Chance3}" Minimum="0" Maximum="98" Increment="1" FormatString="0" Width="110"/>
+                          <TextBlock Text="%" VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <TextBlock Text="{Binding ChanceText3}" IsVisible="{Binding !Open3}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                      </Panel>
+                      <Panel IsVisible="{Binding IsItemRow}">
+                        <DockPanel IsVisible="{Binding Open3}">
+                          <Image DockPanel.Dock="Left" Width="32" Height="32" Margin="0,0,4,0" Source="{Binding Item3, Converter={x:Static controls:GameIconConverter.Item}}"/>
+                          <controls:FusionAutoCompleteBox ItemsSource="{Binding ItemNamesList}" SelectedIndex="{Binding Item3}"
+                                    AllowsNone="False" HorizontalAlignment="Stretch" FontSize="12"/>
+                        </DockPanel>
+                        <Image IsVisible="{Binding !Open3}" Width="32" Height="32" HorizontalAlignment="Center"
+                               ToolTip.Tip="{Binding Name3}" Source="{Binding Item3, Converter={x:Static controls:GameIconConverter.Item}}"/>
+                      </Panel>
+                    </Panel>
+                  </DataTemplate>
+                </DataGridTemplateColumn.CellTemplate>
+              </DataGridTemplateColumn>
+              <DataGridTemplateColumn Width="56" MinWidth="56">
+                <DataGridTemplateColumn.Header>
+                  <Button Content="5" Tag="4" Click="PickupColumn_Click"
+                          ToolTip.Tip="Slot 5" Padding="6,2"/>
+                </DataGridTemplateColumn.Header>
+                <DataGridTemplateColumn.CellTemplate>
+                  <DataTemplate x:DataType="vm:PickupRangeRow">
+                    <Panel>
+                      <Panel IsVisible="{Binding IsChanceRow}">
+                        <StackPanel Orientation="Horizontal" Spacing="4" IsVisible="{Binding Open4}" VerticalAlignment="Center">
+                          <NumericUpDown Value="{Binding Chance4}" Minimum="0" Maximum="98" Increment="1" FormatString="0" Width="110"/>
+                          <TextBlock Text="%" VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <TextBlock Text="{Binding ChanceText4}" IsVisible="{Binding !Open4}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                      </Panel>
+                      <Panel IsVisible="{Binding IsItemRow}">
+                        <DockPanel IsVisible="{Binding Open4}">
+                          <Image DockPanel.Dock="Left" Width="32" Height="32" Margin="0,0,4,0" Source="{Binding Item4, Converter={x:Static controls:GameIconConverter.Item}}"/>
+                          <controls:FusionAutoCompleteBox ItemsSource="{Binding ItemNamesList}" SelectedIndex="{Binding Item4}"
+                                    AllowsNone="False" HorizontalAlignment="Stretch" FontSize="12"/>
+                        </DockPanel>
+                        <Image IsVisible="{Binding !Open4}" Width="32" Height="32" HorizontalAlignment="Center"
+                               ToolTip.Tip="{Binding Name4}" Source="{Binding Item4, Converter={x:Static controls:GameIconConverter.Item}}"/>
+                      </Panel>
+                    </Panel>
+                  </DataTemplate>
+                </DataGridTemplateColumn.CellTemplate>
+              </DataGridTemplateColumn>
+              <DataGridTemplateColumn Width="56" MinWidth="56">
+                <DataGridTemplateColumn.Header>
+                  <Button Content="6" Tag="5" Click="PickupColumn_Click"
+                          ToolTip.Tip="Slot 6" Padding="6,2"/>
+                </DataGridTemplateColumn.Header>
+                <DataGridTemplateColumn.CellTemplate>
+                  <DataTemplate x:DataType="vm:PickupRangeRow">
+                    <Panel>
+                      <Panel IsVisible="{Binding IsChanceRow}">
+                        <StackPanel Orientation="Horizontal" Spacing="4" IsVisible="{Binding Open5}" VerticalAlignment="Center">
+                          <NumericUpDown Value="{Binding Chance5}" Minimum="0" Maximum="98" Increment="1" FormatString="0" Width="110"/>
+                          <TextBlock Text="%" VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <TextBlock Text="{Binding ChanceText5}" IsVisible="{Binding !Open5}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                      </Panel>
+                      <Panel IsVisible="{Binding IsItemRow}">
+                        <DockPanel IsVisible="{Binding Open5}">
+                          <Image DockPanel.Dock="Left" Width="32" Height="32" Margin="0,0,4,0" Source="{Binding Item5, Converter={x:Static controls:GameIconConverter.Item}}"/>
+                          <controls:FusionAutoCompleteBox ItemsSource="{Binding ItemNamesList}" SelectedIndex="{Binding Item5}"
+                                    AllowsNone="False" HorizontalAlignment="Stretch" FontSize="12"/>
+                        </DockPanel>
+                        <Image IsVisible="{Binding !Open5}" Width="32" Height="32" HorizontalAlignment="Center"
+                               ToolTip.Tip="{Binding Name5}" Source="{Binding Item5, Converter={x:Static controls:GameIconConverter.Item}}"/>
+                      </Panel>
+                    </Panel>
+                  </DataTemplate>
+                </DataGridTemplateColumn.CellTemplate>
+              </DataGridTemplateColumn>
+              <DataGridTemplateColumn Width="56" MinWidth="56">
+                <DataGridTemplateColumn.Header>
+                  <Button Content="7" Tag="6" Click="PickupColumn_Click"
+                          ToolTip.Tip="Slot 7" Padding="6,2"/>
+                </DataGridTemplateColumn.Header>
+                <DataGridTemplateColumn.CellTemplate>
+                  <DataTemplate x:DataType="vm:PickupRangeRow">
+                    <Panel>
+                      <Panel IsVisible="{Binding IsChanceRow}">
+                        <StackPanel Orientation="Horizontal" Spacing="4" IsVisible="{Binding Open6}" VerticalAlignment="Center">
+                          <NumericUpDown Value="{Binding Chance6}" Minimum="0" Maximum="98" Increment="1" FormatString="0" Width="110"/>
+                          <TextBlock Text="%" VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <TextBlock Text="{Binding ChanceText6}" IsVisible="{Binding !Open6}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                      </Panel>
+                      <Panel IsVisible="{Binding IsItemRow}">
+                        <DockPanel IsVisible="{Binding Open6}">
+                          <Image DockPanel.Dock="Left" Width="32" Height="32" Margin="0,0,4,0" Source="{Binding Item6, Converter={x:Static controls:GameIconConverter.Item}}"/>
+                          <controls:FusionAutoCompleteBox ItemsSource="{Binding ItemNamesList}" SelectedIndex="{Binding Item6}"
+                                    AllowsNone="False" HorizontalAlignment="Stretch" FontSize="12"/>
+                        </DockPanel>
+                        <Image IsVisible="{Binding !Open6}" Width="32" Height="32" HorizontalAlignment="Center"
+                               ToolTip.Tip="{Binding Name6}" Source="{Binding Item6, Converter={x:Static controls:GameIconConverter.Item}}"/>
+                      </Panel>
+                    </Panel>
+                  </DataTemplate>
+                </DataGridTemplateColumn.CellTemplate>
+              </DataGridTemplateColumn>
+              <DataGridTemplateColumn Width="56" MinWidth="56">
+                <DataGridTemplateColumn.Header>
+                  <Button Content="8" Tag="7" Click="PickupColumn_Click"
+                          ToolTip.Tip="Slot 8" Padding="6,2"/>
+                </DataGridTemplateColumn.Header>
+                <DataGridTemplateColumn.CellTemplate>
+                  <DataTemplate x:DataType="vm:PickupRangeRow">
+                    <Panel>
+                      <Panel IsVisible="{Binding IsChanceRow}">
+                        <StackPanel Orientation="Horizontal" Spacing="4" IsVisible="{Binding Open7}" VerticalAlignment="Center">
+                          <NumericUpDown Value="{Binding Chance7}" Minimum="0" Maximum="98" Increment="1" FormatString="0" Width="110"/>
+                          <TextBlock Text="%" VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <TextBlock Text="{Binding ChanceText7}" IsVisible="{Binding !Open7}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                      </Panel>
+                      <Panel IsVisible="{Binding IsItemRow}">
+                        <DockPanel IsVisible="{Binding Open7}">
+                          <Image DockPanel.Dock="Left" Width="32" Height="32" Margin="0,0,4,0" Source="{Binding Item7, Converter={x:Static controls:GameIconConverter.Item}}"/>
+                          <controls:FusionAutoCompleteBox ItemsSource="{Binding ItemNamesList}" SelectedIndex="{Binding Item7}"
+                                    AllowsNone="False" HorizontalAlignment="Stretch" FontSize="12"/>
+                        </DockPanel>
+                        <Image IsVisible="{Binding !Open7}" Width="32" Height="32" HorizontalAlignment="Center"
+                               ToolTip.Tip="{Binding Name7}" Source="{Binding Item7, Converter={x:Static controls:GameIconConverter.Item}}"/>
+                      </Panel>
+                    </Panel>
+                  </DataTemplate>
+                </DataGridTemplateColumn.CellTemplate>
+              </DataGridTemplateColumn>
+              <DataGridTemplateColumn Width="56" MinWidth="56">
+                <DataGridTemplateColumn.Header>
+                  <Button Content="9" Tag="8" Click="PickupColumn_Click"
+                          ToolTip.Tip="Slot 9" Padding="6,2"/>
+                </DataGridTemplateColumn.Header>
+                <DataGridTemplateColumn.CellTemplate>
+                  <DataTemplate x:DataType="vm:PickupRangeRow">
+                    <Panel>
+                      <Panel IsVisible="{Binding IsChanceRow}">
+                        <StackPanel Orientation="Horizontal" Spacing="4" IsVisible="{Binding Open8}" VerticalAlignment="Center">
+                          <NumericUpDown Value="{Binding Chance8}" Minimum="0" Maximum="98" Increment="1" FormatString="0" Width="110"/>
+                          <TextBlock Text="%" VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <TextBlock Text="{Binding ChanceText8}" IsVisible="{Binding !Open8}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                      </Panel>
+                      <Panel IsVisible="{Binding IsItemRow}">
+                        <DockPanel IsVisible="{Binding Open8}">
+                          <Image DockPanel.Dock="Left" Width="32" Height="32" Margin="0,0,4,0" Source="{Binding Item8, Converter={x:Static controls:GameIconConverter.Item}}"/>
+                          <controls:FusionAutoCompleteBox ItemsSource="{Binding ItemNamesList}" SelectedIndex="{Binding Item8}"
+                                    AllowsNone="False" HorizontalAlignment="Stretch" FontSize="12"/>
+                        </DockPanel>
+                        <Image IsVisible="{Binding !Open8}" Width="32" Height="32" HorizontalAlignment="Center"
+                               ToolTip.Tip="{Binding Name8}" Source="{Binding Item8, Converter={x:Static controls:GameIconConverter.Item}}"/>
+                      </Panel>
+                    </Panel>
+                  </DataTemplate>
+                </DataGridTemplateColumn.CellTemplate>
+              </DataGridTemplateColumn>
+              <DataGridTemplateColumn Width="56" MinWidth="56">
+                <DataGridTemplateColumn.Header>
+                  <Button Content="R1" Tag="9" Click="PickupColumn_Click"
+                          ToolTip.Tip="Rare 1" Padding="6,2"/>
+                </DataGridTemplateColumn.Header>
+                <DataGridTemplateColumn.CellTemplate>
+                  <DataTemplate x:DataType="vm:PickupRangeRow">
+                    <Panel>
+                      <TextBlock Text="1%" IsVisible="{Binding IsChanceRow}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                      <Panel IsVisible="{Binding IsItemRow}">
+                        <DockPanel IsVisible="{Binding Open9}">
+                          <Image DockPanel.Dock="Left" Width="32" Height="32" Margin="0,0,4,0" Source="{Binding Rare0, Converter={x:Static controls:GameIconConverter.Item}}"/>
+                          <controls:FusionAutoCompleteBox ItemsSource="{Binding ItemNamesList}" SelectedIndex="{Binding Rare0}"
+                                    AllowsNone="False" HorizontalAlignment="Stretch" FontSize="12"/>
+                        </DockPanel>
+                        <Image IsVisible="{Binding !Open9}" Width="32" Height="32" HorizontalAlignment="Center"
+                               ToolTip.Tip="{Binding RareName0}" Source="{Binding Rare0, Converter={x:Static controls:GameIconConverter.Item}}"/>
+                      </Panel>
+                    </Panel>
+                  </DataTemplate>
+                </DataGridTemplateColumn.CellTemplate>
+              </DataGridTemplateColumn>
+              <DataGridTemplateColumn Width="56" MinWidth="56">
+                <DataGridTemplateColumn.Header>
+                  <Button Content="R2" Tag="10" Click="PickupColumn_Click"
+                          ToolTip.Tip="Rare 2" Padding="6,2"/>
+                </DataGridTemplateColumn.Header>
+                <DataGridTemplateColumn.CellTemplate>
+                  <DataTemplate x:DataType="vm:PickupRangeRow">
+                    <Panel>
+                      <TextBlock Text="1%" IsVisible="{Binding IsChanceRow}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                      <Panel IsVisible="{Binding IsItemRow}">
+                        <DockPanel IsVisible="{Binding Open10}">
+                          <Image DockPanel.Dock="Left" Width="32" Height="32" Margin="0,0,4,0" Source="{Binding Rare1, Converter={x:Static controls:GameIconConverter.Item}}"/>
+                          <controls:FusionAutoCompleteBox ItemsSource="{Binding ItemNamesList}" SelectedIndex="{Binding Rare1}"
+                                    AllowsNone="False" HorizontalAlignment="Stretch" FontSize="12"/>
+                        </DockPanel>
+                        <Image IsVisible="{Binding !Open10}" Width="32" Height="32" HorizontalAlignment="Center"
+                               ToolTip.Tip="{Binding RareName1}" Source="{Binding Rare1, Converter={x:Static controls:GameIconConverter.Item}}"/>
+                      </Panel>
+                    </Panel>
+                  </DataTemplate>
+                </DataGridTemplateColumn.CellTemplate>
+              </DataGridTemplateColumn>
+            </DataGrid.Columns>
+          </DataGrid>
+          </Panel>
+        </DockPanel>
+      </TabItem>
+
+      <TabItem x:Name="HiddenTab" Header="Hidden items" IsVisible="{Binding ShowHiddenItemsTab}">
+        <Grid ColumnDefinitions="300,8,*" Margin="4">
+          <!-- Left: list -->
+          <DockPanel Grid.Column="0">
+            <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Spacing="6" Margin="0,6,0,0">
+              <Button Content="Add" controls:Icon.Key="addIcon"    Click="HiddenAdd_Click"    MinWidth="70"
+                      ToolTip.Tip="{Binding HiddenAddHelp}"/>
+              <Button Content="Remove" controls:Icon.Key="deleteIcon" Click="HiddenRemove_Click" MinWidth="70"
+                      IsEnabled="{Binding HiddenItemSelected}"/>
+            </StackPanel>
+            <TextBlock DockPanel.Dock="Top" Text="{Binding HiddenEntryCount}"
+                       FontSize="12" Margin="0,0,0,4"/>
+            <ListBox ItemsSource="{Binding HiddenItems}"
+                     SelectedItem="{Binding SelectedHiddenItem}">
+              <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="vm:HiddenItemRowVM">
+                  <DockPanel>
+                    <Image DockPanel.Dock="Left" Width="32" Height="32" Margin="0,0,6,0" VerticalAlignment="Center"
+                           Source="{Binding ItemID, Converter={x:Static controls:GameIconConverter.Item}}"/>
+                    <StackPanel>
+                      <TextBlock Text="{Binding Display}" FontSize="12" TextWrapping="Wrap"/>
+                      <TextBlock Text="{Binding Detail}" FontSize="11" TextWrapping="Wrap" Foreground="{DynamicResource Editor.Subtle}"/>
+                    </StackPanel>
+                  </DockPanel>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+          </DockPanel>
+
+          <!-- Right: edit panel -->
+          <Border x:Name="HiddenEditPanel" Grid.Column="2" Padding="10" BorderBrush="{DynamicResource Editor.Border}" BorderThickness="1" CornerRadius="4"
+                  IsEnabled="{Binding HiddenItemSelected}">
+            <StackPanel Spacing="10">
+              <StackPanel Spacing="4">
+                <TextBlock Text="Item" FontSize="12"/>
+                <DockPanel>
+                  <Image DockPanel.Dock="Left" Width="32" Height="32" Margin="0,0,6,0"
+                         Source="{Binding SelectedItemID, Converter={x:Static controls:GameIconConverter.Item}}"/>
+                  <controls:FusionAutoCompleteBox controls:EditorLink.To="Item" ItemsSource="{Binding ItemNames}"
+                            SelectedIndex="{Binding SelectedItemID}"
+                            HorizontalAlignment="Stretch"/>
+                </DockPanel>
+              </StackPanel>
+              <Grid ColumnDefinitions="*,12,*">
+                <StackPanel Grid.Column="0" Spacing="4">
+                  <TextBlock Text="Amount" FontSize="12"/>
+                  <NumericUpDown Value="{Binding SelectedAmount}"
+                                 Minimum="1" Maximum="99" FormatString="0"/>
+                </StackPanel>
+                <StackPanel Grid.Column="2" Spacing="4">
+                  <TextBlock Text="Script ID" FontSize="12"/>
+                  <NumericUpDown Value="{Binding SelectedScriptID}"
+                                 Minimum="0" Maximum="{Binding HiddenScriptMax}" FormatString="0"/>
+                </StackPanel>
+              </Grid>
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <TextBlock Text="{Binding SelectedScriptLabel}" VerticalAlignment="Center"
+                           FontStyle="Italic" Foreground="{DynamicResource Editor.Subtle}" FontSize="12"/>
+                <Button Content="Go to script" controls:Icon.Key="goto" Click="GoToHiddenScript_Click"
+                        IsVisible="{Binding HiddenItemSelected}"/>
+                <Button Content="Go to event" controls:Icon.Key="goto" Click="GoToHiddenEvent_Click"
+                        IsVisible="{Binding CanGoToHiddenEvent}"/>
+              </StackPanel>
+            </StackPanel>
+          </Border>
+        </Grid>
+      </TabItem>
+
+      <TabItem Header="Rock Smash" IsVisible="{Binding ShowRockSmashTab}">
+        <DockPanel Margin="4">
+          <!-- Item-drop tables: hardcoded in ov001.bin, only confirmed for English builds -->
+          <Border x:Name="RockSmashTables" DockPanel.Dock="Top" Margin="0,0,0,8" Padding="8"
+                  BorderBrush="{DynamicResource Editor.Border}" BorderThickness="1" CornerRadius="4"
+                  IsVisible="{Binding ShowRockSmashItemTables}">
+            <StackPanel Spacing="6">
+              <StackPanel Orientation="Horizontal" Spacing="4">
+                <TextBlock Text="Item drop tables" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center"/>
+                <controls:HelpTip Text="Each header picks a table. Its slots drop at 25, 20, 10, 10, 10, 10, 10 and 5%."/>
+              </StackPanel>
+
+              <TextBlock Text="Default" FontSize="11" FontWeight="SemiBold" Margin="0,4,0,0"/>
+              <UniformGrid Columns="4" DataContext="{Binding RockSmashDefaultTable}" x:DataType="vm:RockSmashItemSlotsRow">
+                <DockPanel Margin="1"><Image DockPanel.Dock="Left" Width="32" Height="32" Margin="0,0,4,0" Source="{Binding Item0, Converter={x:Static controls:GameIconConverter.Item}}"/><controls:FusionAutoCompleteBox ItemsSource="{Binding ItemNames}" SelectedIndex="{Binding Item0}" AllowsNone="False" FontSize="11"/></DockPanel>
+                <DockPanel Margin="1"><Image DockPanel.Dock="Left" Width="32" Height="32" Margin="0,0,4,0" Source="{Binding Item1, Converter={x:Static controls:GameIconConverter.Item}}"/><controls:FusionAutoCompleteBox ItemsSource="{Binding ItemNames}" SelectedIndex="{Binding Item1}" AllowsNone="False" FontSize="11"/></DockPanel>
+                <DockPanel Margin="1"><Image DockPanel.Dock="Left" Width="32" Height="32" Margin="0,0,4,0" Source="{Binding Item2, Converter={x:Static controls:GameIconConverter.Item}}"/><controls:FusionAutoCompleteBox ItemsSource="{Binding ItemNames}" SelectedIndex="{Binding Item2}" AllowsNone="False" FontSize="11"/></DockPanel>
+                <DockPanel Margin="1"><Image DockPanel.Dock="Left" Width="32" Height="32" Margin="0,0,4,0" Source="{Binding Item3, Converter={x:Static controls:GameIconConverter.Item}}"/><controls:FusionAutoCompleteBox ItemsSource="{Binding ItemNames}" SelectedIndex="{Binding Item3}" AllowsNone="False" FontSize="11"/></DockPanel>
+                <DockPanel Margin="1"><Image DockPanel.Dock="Left" Width="32" Height="32" Margin="0,0,4,0" Source="{Binding Item4, Converter={x:Static controls:GameIconConverter.Item}}"/><controls:FusionAutoCompleteBox ItemsSource="{Binding ItemNames}" SelectedIndex="{Binding Item4}" AllowsNone="False" FontSize="11"/></DockPanel>
+                <DockPanel Margin="1"><Image DockPanel.Dock="Left" Width="32" Height="32" Margin="0,0,4,0" Source="{Binding Item5, Converter={x:Static controls:GameIconConverter.Item}}"/><controls:FusionAutoCompleteBox ItemsSource="{Binding ItemNames}" SelectedIndex="{Binding Item5}" AllowsNone="False" FontSize="11"/></DockPanel>
+                <DockPanel Margin="1"><Image DockPanel.Dock="Left" Width="32" Height="32" Margin="0,0,4,0" Source="{Binding Item6, Converter={x:Static controls:GameIconConverter.Item}}"/><controls:FusionAutoCompleteBox ItemsSource="{Binding ItemNames}" SelectedIndex="{Binding Item6}" AllowsNone="False" FontSize="11"/></DockPanel>
+                <DockPanel Margin="1"><Image DockPanel.Dock="Left" Width="32" Height="32" Margin="0,0,4,0" Source="{Binding Item7, Converter={x:Static controls:GameIconConverter.Item}}"/><controls:FusionAutoCompleteBox ItemsSource="{Binding ItemNames}" SelectedIndex="{Binding Item7}" AllowsNone="False" FontSize="11"/></DockPanel>
+              </UniformGrid>
+
+              <TextBlock Text="Ruins of Alph" FontSize="11" FontWeight="SemiBold" Margin="0,4,0,0"/>
+              <UniformGrid Columns="4" DataContext="{Binding RockSmashRuinsOfAlphTable}" x:DataType="vm:RockSmashItemSlotsRow">
+                <DockPanel Margin="1"><Image DockPanel.Dock="Left" Width="32" Height="32" Margin="0,0,4,0" Source="{Binding Item0, Converter={x:Static controls:GameIconConverter.Item}}"/><controls:FusionAutoCompleteBox ItemsSource="{Binding ItemNames}" SelectedIndex="{Binding Item0}" AllowsNone="False" FontSize="11"/></DockPanel>
+                <DockPanel Margin="1"><Image DockPanel.Dock="Left" Width="32" Height="32" Margin="0,0,4,0" Source="{Binding Item1, Converter={x:Static controls:GameIconConverter.Item}}"/><controls:FusionAutoCompleteBox ItemsSource="{Binding ItemNames}" SelectedIndex="{Binding Item1}" AllowsNone="False" FontSize="11"/></DockPanel>
+                <DockPanel Margin="1"><Image DockPanel.Dock="Left" Width="32" Height="32" Margin="0,0,4,0" Source="{Binding Item2, Converter={x:Static controls:GameIconConverter.Item}}"/><controls:FusionAutoCompleteBox ItemsSource="{Binding ItemNames}" SelectedIndex="{Binding Item2}" AllowsNone="False" FontSize="11"/></DockPanel>
+                <DockPanel Margin="1"><Image DockPanel.Dock="Left" Width="32" Height="32" Margin="0,0,4,0" Source="{Binding Item3, Converter={x:Static controls:GameIconConverter.Item}}"/><controls:FusionAutoCompleteBox ItemsSource="{Binding ItemNames}" SelectedIndex="{Binding Item3}" AllowsNone="False" FontSize="11"/></DockPanel>
+                <DockPanel Margin="1"><Image DockPanel.Dock="Left" Width="32" Height="32" Margin="0,0,4,0" Source="{Binding Item4, Converter={x:Static controls:GameIconConverter.Item}}"/><controls:FusionAutoCompleteBox ItemsSource="{Binding ItemNames}" SelectedIndex="{Binding Item4}" AllowsNone="False" FontSize="11"/></DockPanel>
+                <DockPanel Margin="1"><Image DockPanel.Dock="Left" Width="32" Height="32" Margin="0,0,4,0" Source="{Binding Item5, Converter={x:Static controls:GameIconConverter.Item}}"/><controls:FusionAutoCompleteBox ItemsSource="{Binding ItemNames}" SelectedIndex="{Binding Item5}" AllowsNone="False" FontSize="11"/></DockPanel>
+                <DockPanel Margin="1"><Image DockPanel.Dock="Left" Width="32" Height="32" Margin="0,0,4,0" Source="{Binding Item6, Converter={x:Static controls:GameIconConverter.Item}}"/><controls:FusionAutoCompleteBox ItemsSource="{Binding ItemNames}" SelectedIndex="{Binding Item6}" AllowsNone="False" FontSize="11"/></DockPanel>
+                <DockPanel Margin="1"><Image DockPanel.Dock="Left" Width="32" Height="32" Margin="0,0,4,0" Source="{Binding Item7, Converter={x:Static controls:GameIconConverter.Item}}"/><controls:FusionAutoCompleteBox ItemsSource="{Binding ItemNames}" SelectedIndex="{Binding Item7}" AllowsNone="False" FontSize="11"/></DockPanel>
+              </UniformGrid>
+
+              <TextBlock Text="Cliff Cave" FontSize="11" FontWeight="SemiBold" Margin="0,4,0,0"/>
+              <UniformGrid Columns="4" DataContext="{Binding RockSmashCliffCaveTable}" x:DataType="vm:RockSmashItemSlotsRow">
+                <DockPanel Margin="1"><Image DockPanel.Dock="Left" Width="32" Height="32" Margin="0,0,4,0" Source="{Binding Item0, Converter={x:Static controls:GameIconConverter.Item}}"/><controls:FusionAutoCompleteBox ItemsSource="{Binding ItemNames}" SelectedIndex="{Binding Item0}" AllowsNone="False" FontSize="11"/></DockPanel>
+                <DockPanel Margin="1"><Image DockPanel.Dock="Left" Width="32" Height="32" Margin="0,0,4,0" Source="{Binding Item1, Converter={x:Static controls:GameIconConverter.Item}}"/><controls:FusionAutoCompleteBox ItemsSource="{Binding ItemNames}" SelectedIndex="{Binding Item1}" AllowsNone="False" FontSize="11"/></DockPanel>
+                <DockPanel Margin="1"><Image DockPanel.Dock="Left" Width="32" Height="32" Margin="0,0,4,0" Source="{Binding Item2, Converter={x:Static controls:GameIconConverter.Item}}"/><controls:FusionAutoCompleteBox ItemsSource="{Binding ItemNames}" SelectedIndex="{Binding Item2}" AllowsNone="False" FontSize="11"/></DockPanel>
+                <DockPanel Margin="1"><Image DockPanel.Dock="Left" Width="32" Height="32" Margin="0,0,4,0" Source="{Binding Item3, Converter={x:Static controls:GameIconConverter.Item}}"/><controls:FusionAutoCompleteBox ItemsSource="{Binding ItemNames}" SelectedIndex="{Binding Item3}" AllowsNone="False" FontSize="11"/></DockPanel>
+                <DockPanel Margin="1"><Image DockPanel.Dock="Left" Width="32" Height="32" Margin="0,0,4,0" Source="{Binding Item4, Converter={x:Static controls:GameIconConverter.Item}}"/><controls:FusionAutoCompleteBox ItemsSource="{Binding ItemNames}" SelectedIndex="{Binding Item4}" AllowsNone="False" FontSize="11"/></DockPanel>
+                <DockPanel Margin="1"><Image DockPanel.Dock="Left" Width="32" Height="32" Margin="0,0,4,0" Source="{Binding Item5, Converter={x:Static controls:GameIconConverter.Item}}"/><controls:FusionAutoCompleteBox ItemsSource="{Binding ItemNames}" SelectedIndex="{Binding Item5}" AllowsNone="False" FontSize="11"/></DockPanel>
+                <DockPanel Margin="1"><Image DockPanel.Dock="Left" Width="32" Height="32" Margin="0,0,4,0" Source="{Binding Item6, Converter={x:Static controls:GameIconConverter.Item}}"/><controls:FusionAutoCompleteBox ItemsSource="{Binding ItemNames}" SelectedIndex="{Binding Item6}" AllowsNone="False" FontSize="11"/></DockPanel>
+                <DockPanel Margin="1"><Image DockPanel.Dock="Left" Width="32" Height="32" Margin="0,0,4,0" Source="{Binding Item7, Converter={x:Static controls:GameIconConverter.Item}}"/><controls:FusionAutoCompleteBox ItemsSource="{Binding ItemNames}" SelectedIndex="{Binding Item7}" AllowsNone="False" FontSize="11"/></DockPanel>
+              </UniformGrid>
+            </StackPanel>
+          </Border>
+
+          <controls:HelpTip DockPanel.Dock="Top" Margin="0,0,0,8" HorizontalAlignment="Left"
+                            IsVisible="{Binding !ShowRockSmashItemTables}"
+                            Text="Drop tables can only be edited on English HeartGold and SoulSilver"/>
+
+          <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="10" Margin="0,0,0,4">
+            <TextBox Width="220" Text="{Binding RockSmashSearch}" PlaceholderText="Search headers"/>
+            <CheckBox Content="Only headers with odds" IsChecked="{Binding RockSmashOnlyWithOdds}"/>
+            <TextBlock Text="{Binding RockSmashCount}" FontSize="11" VerticalAlignment="Center" Foreground="{DynamicResource Editor.Subtle}"/>
+          </StackPanel>
+
+          <DataGrid x:Name="RockSmashGrid"
+                    ItemsSource="{Binding RockSmashShown}"
+                    CanUserReorderColumns="False"
+                    IsReadOnly="False"
+                    HorizontalScrollBarVisibility="Auto">
+            <DataGrid.Columns>
+              <DataGridTextColumn Header="Header" Binding="{Binding HeaderLabel}" Width="240" IsReadOnly="True"/>
+              <DataGridTemplateColumn Header="Odds (0-100)" Width="130">
+                <DataGridTemplateColumn.CellTemplate>
+                  <DataTemplate x:DataType="vm:RockSmashHeaderRow">
+                    <NumericUpDown Value="{Binding Odds}" Minimum="0" Maximum="100" FormatString="0" FontSize="11"/>
+                  </DataTemplate>
+                </DataGridTemplateColumn.CellTemplate>
+              </DataGridTemplateColumn>
+              <DataGridTemplateColumn Header="Table" Width="160">
+                <DataGridTemplateColumn.CellTemplate>
+                  <DataTemplate x:DataType="vm:RockSmashHeaderRow">
+                    <ComboBox SelectedIndex="{Binding TypeIndex}" HorizontalAlignment="Stretch" FontSize="11">
+                      <ComboBoxItem Content="Default"/>
+                      <ComboBoxItem Content="Ruins of Alph"/>
+                      <ComboBoxItem Content="Cliff cave"/>
+                    </ComboBox>
+                  </DataTemplate>
+                </DataGridTemplateColumn.CellTemplate>
+              </DataGridTemplateColumn>
+              <DataGridTextColumn Header="" Binding="{Binding MissingLabel}" Width="*" IsReadOnly="True"/>
+            </DataGrid.Columns>
+          </DataGrid>
+        </DockPanel>
+      </TabItem>
+    </TabControl>
+  </DockPanel>
+</Window>

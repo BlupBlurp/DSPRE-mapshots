@@ -1,0 +1,347 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="clr-namespace:DSPRE.Avalonia.Controls"
+             xmlns:vm="clr-namespace:DSPRE.Avalonia.ViewModels.Pokemon"
+             x:Class="DSPRE.Avalonia.Views.Pokemon.PokemonSpriteEditorView"
+             x:DataType="vm:PokemonSpriteEditorViewModel">
+  <Design.DataContext>
+    <vm:PokemonSpriteEditorViewModel/>
+  </Design.DataContext>
+
+  <UserControl.Styles>
+    <Style Selector="TextBlock.header">
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="HorizontalAlignment" Value="Center"/>
+      <Setter Property="Margin" Value="0,0,0,4"/>
+    </Style>
+    <Style Selector="TextBlock.sub">
+      <Setter Property="FontSize" Value="10"/>
+      <Setter Property="Foreground" Value="#888"/>
+      <Setter Property="HorizontalAlignment" Value="Center"/>
+    </Style>
+    <Style Selector="Button.sprite-btn">
+      <Setter Property="Padding" Value="6,3"/>
+      <Setter Property="MinWidth" Value="80"/>
+      <Setter Property="Margin" Value="2,0"/>
+    </Style>
+    <Style Selector="Border.sprite-cell">
+      <Setter Property="Background" Value="#2A2A2A"/>
+      <Setter Property="CornerRadius" Value="4"/>
+      <Setter Property="Padding" Value="4"/>
+      <Setter Property="Width" Value="140"/>
+      <Setter Property="Height" Value="140"/>
+    </Style>
+    <Style Selector="Image.sprite-img">
+      <Setter Property="Stretch" Value="Uniform"/>
+      <Setter Property="Width" Value="120"/>
+      <Setter Property="Height" Value="120"/>
+    </Style>
+    <Style Selector="Button.frame-btn">
+      <Setter Property="Padding" Value="6,1"/>
+      <Setter Property="FontSize" Value="10"/>
+      <Setter Property="MinWidth" Value="0"/>
+    </Style>
+    <Style Selector="Button.frame-btn.selected">
+      <Setter Property="Background" Value="#3B6EA5"/>
+      <Setter Property="Foreground" Value="White"/>
+      <Setter Property="FontWeight" Value="Bold"/>
+    </Style>
+    <Style Selector="Button.animate-btn">
+      <Setter Property="Width" Value="140"/>
+      <Setter Property="HorizontalContentAlignment" Value="Center"/>
+    </Style>
+    <Style Selector="Border.swatch">
+      <Setter Property="Width" Value="20"/>
+      <Setter Property="Height" Value="20"/>
+      <Setter Property="CornerRadius" Value="3"/>
+      <Setter Property="BorderBrush" Value="#555"/>
+      <Setter Property="BorderThickness" Value="1"/>
+    </Style>
+    <Style Selector="Button.swatch-btn">
+      <Setter Property="Padding" Value="0"/>
+      <Setter Property="Margin" Value="0"/>
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="Width" Value="20"/>
+      <Setter Property="Height" Value="20"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="ToolTip.Tip" Value="Click to edit this color"/>
+    </Style>
+  </UserControl.Styles>
+
+  <DockPanel LastChildFill="True" Margin="8">
+
+    <!-- Top toolbar: Animate top-left, Import/Export Wizard centered, per-species extras (alternate forms etc.) top-right -->
+    <Border DockPanel.Dock="Top" Padding="0,0,0,10">
+      <StackPanel Spacing="4">
+        <Grid ColumnDefinitions="Auto,*,Auto">
+          <Button Grid.Column="0" Classes="animate-btn" Content="{Binding AnimateButtonText}" Click="AnimateFrames_Click"/>
+
+          <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center">
+            <Button Content="Import wizard…" controls:Icon.Key="import" Click="OpenImportWizard_Click"
+                    Padding="14,8" FontWeight="Bold" FontSize="14"/>
+            <Button Content="Export wizard…" controls:Icon.Key="export" Click="OpenExportWizard_Click"
+                    Padding="14,8" FontSize="14"/>
+            <Button Content="Open in All graphics" controls:Icon.Key="OpenLink" Click="OpenInGraphics_Click"
+                    Padding="14,8" FontSize="14"
+                    ToolTip.Tip="Open in All graphics"/>
+          </StackPanel>
+
+          <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+            <Button Content="{Binding AddOppositeGenderLabel}"
+                    Click="AddOppositeGenderSprites_Click"
+                    IsVisible="{Binding CanAddOppositeGenderSprites}"
+                    FontSize="11" Padding="8,4"
+                    ToolTip.Tip="Copies the existing gender's sprites into the missing gender."/>
+            <ComboBox IsVisible="{Binding HasAlternateForms}"
+                      ItemsSource="{Binding VariantNames}"
+                      SelectedIndex="{Binding SelectedVariantIndex}"
+                      MinWidth="180" FontSize="11"
+                      ToolTip.Tip="Pick a form; the view below updates in place."/>
+          </StackPanel>
+        </Grid>
+
+        <TextBlock IsVisible="{Binding FormSharesBaseData}" Text="{Binding FormSharesBaseDataText}"
+                   FontSize="10" Foreground="{DynamicResource Editor.Subtle}" TextWrapping="Wrap"
+                   HorizontalAlignment="Right"/>
+      </StackPanel>
+    </Border>
+
+    <Border DockPanel.Dock="Bottom" Padding="4,4,4,0">
+      <TextBlock Text="{Binding StatusText}" FontStyle="Italic" Foreground="{DynamicResource Editor.Bad}"
+                 TextWrapping="Wrap" IsVisible="{Binding StatusText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+    </Border>
+    <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+      <StackPanel Spacing="16" Margin="4">
+        <GroupBox Header="Normal sprites">
+          <StackPanel Spacing="10" Margin="4">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <TextBlock Text="Sprite sheet" Width="80" VerticalAlignment="Center" FontWeight="SemiBold"
+                         ToolTip.Tip="Back and front as one 160x80 image. Art only, no palette."/>
+              <Button Classes="sprite-btn" Content="Import female…" controls:Icon.Key="import" Click="ImportFemaleSheet_Click" IsVisible="{Binding ShowFemaleFormImport}"/>
+              <Button Classes="sprite-btn" Content="Export female…" controls:Icon.Key="export" Click="ExportFemaleSheet_Click"/>
+              <Button Classes="sprite-btn" Content="Import male…" controls:Icon.Key="import" Click="ImportMaleSheet_Click"/>
+              <Button Classes="sprite-btn" Content="Export male…" controls:Icon.Key="export" Click="ExportMaleSheet_Click"/>
+              <Border Width="1" Margin="4,2" Background="{DynamicResource Editor.Border}" IsVisible="{Binding CanUseFullSheet}"/>
+              <Button Classes="sprite-btn" Content="Import both…" controls:Icon.Key="import" Click="ImportFullSheet_Click" IsVisible="{Binding CanUseFullSheet}"
+                      ToolTip.Tip="Both genders together: female back, male back, female front, male front, left to right."/>
+              <Button Classes="sprite-btn" Content="Export both…" controls:Icon.Key="export" Click="ExportFullSheet_Click" IsVisible="{Binding CanUseFullSheet}"/>
+            </StackPanel>
+            <Grid ColumnDefinitions="*,8,*,8,*,8,*">
+              <StackPanel Grid.Column="0" Spacing="4" HorizontalAlignment="Center">
+                <TextBlock Classes="header" Text="Female back"/>
+                <Border Classes="sprite-cell">
+                  <Image Classes="sprite-img" Source="{Binding FemaleBackNormal}"/>
+                </Border>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="2" IsVisible="{Binding FemaleBackNormalFrame.ShowFrameToggle}">
+                  <Button Classes="frame-btn" Classes.selected="{Binding FemaleBackNormalFrame.IsFrame1}" Content="1" Click="FemaleBackNormalFrame1_Click" ToolTip.Tip="Show frame 1"/>
+                  <Button Classes="frame-btn" Classes.selected="{Binding FemaleBackNormalFrame.IsFrame2}" Content="2" Click="FemaleBackNormalFrame2_Click" ToolTip.Tip="Show frame 2"/>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="4">
+                  <Button Classes="sprite-btn" Content="Import…" controls:Icon.Key="import" Click="ImportFemaleBackNormal_Click" IsVisible="{Binding ShowFemaleFormImport}"/>
+                  <Button Classes="sprite-btn" Content="Export…" controls:Icon.Key="export" Click="ExportFemaleBackNormal_Click"/>
+                </StackPanel>
+              </StackPanel>
+              <StackPanel Grid.Column="2" Spacing="4" HorizontalAlignment="Center">
+                <TextBlock Classes="header" Text="Male back"/>
+                <Border Classes="sprite-cell">
+                  <Image Classes="sprite-img" Source="{Binding MaleBackNormal}"/>
+                </Border>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="2" IsVisible="{Binding MaleBackNormalFrame.ShowFrameToggle}">
+                  <Button Classes="frame-btn" Classes.selected="{Binding MaleBackNormalFrame.IsFrame1}" Content="1" Click="MaleBackNormalFrame1_Click" ToolTip.Tip="Show frame 1"/>
+                  <Button Classes="frame-btn" Classes.selected="{Binding MaleBackNormalFrame.IsFrame2}" Content="2" Click="MaleBackNormalFrame2_Click" ToolTip.Tip="Show frame 2"/>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="4">
+                  <Button Classes="sprite-btn" Content="Import…" controls:Icon.Key="import" Click="ImportMaleBackNormal_Click"/>
+                  <Button Classes="sprite-btn" Content="Export…" controls:Icon.Key="export" Click="ExportMaleBackNormal_Click"/>
+                </StackPanel>
+              </StackPanel>
+              <StackPanel Grid.Column="4" Spacing="4" HorizontalAlignment="Center">
+                <TextBlock Classes="header" Text="Female front"/>
+                <Border Classes="sprite-cell">
+                  <Image Classes="sprite-img" Source="{Binding FemaleFrontNormal}"/>
+                </Border>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="2" IsVisible="{Binding FemaleFrontNormalFrame.ShowFrameToggle}">
+                  <Button Classes="frame-btn" Classes.selected="{Binding FemaleFrontNormalFrame.IsFrame1}" Content="1" Click="FemaleFrontNormalFrame1_Click" ToolTip.Tip="Show frame 1"/>
+                  <Button Classes="frame-btn" Classes.selected="{Binding FemaleFrontNormalFrame.IsFrame2}" Content="2" Click="FemaleFrontNormalFrame2_Click" ToolTip.Tip="Show frame 2"/>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="4">
+                  <Button Classes="sprite-btn" Content="Import…" controls:Icon.Key="import" Click="ImportFemaleFrontNormal_Click" IsVisible="{Binding ShowFemaleFormImport}"/>
+                  <Button Classes="sprite-btn" Content="Export…" controls:Icon.Key="export" Click="ExportFemaleFrontNormal_Click"/>
+                </StackPanel>
+              </StackPanel>
+              <StackPanel Grid.Column="6" Spacing="4" HorizontalAlignment="Center">
+                <TextBlock Classes="header" Text="Male front"/>
+                <Border Classes="sprite-cell">
+                  <Image Classes="sprite-img" Source="{Binding MaleFrontNormal}"/>
+                </Border>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="2" IsVisible="{Binding MaleFrontNormalFrame.ShowFrameToggle}">
+                  <Button Classes="frame-btn" Classes.selected="{Binding MaleFrontNormalFrame.IsFrame1}" Content="1" Click="MaleFrontNormalFrame1_Click" ToolTip.Tip="Show frame 1"/>
+                  <Button Classes="frame-btn" Classes.selected="{Binding MaleFrontNormalFrame.IsFrame2}" Content="2" Click="MaleFrontNormalFrame2_Click" ToolTip.Tip="Show frame 2"/>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="4">
+                  <Button Classes="sprite-btn" Content="Import…" controls:Icon.Key="import" Click="ImportMaleFrontNormal_Click"/>
+                  <Button Classes="sprite-btn" Content="Export…" controls:Icon.Key="export" Click="ExportMaleFrontNormal_Click"/>
+                </StackPanel>
+              </StackPanel>
+            </Grid>
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <TextBlock Text="Palette" Width="52" VerticalAlignment="Center" FontWeight="SemiBold"/>
+              <ItemsControl ItemsSource="{Binding NormalSwatches}">
+                <ItemsControl.ItemsPanel>
+                  <ItemsPanelTemplate><StackPanel Orientation="Horizontal" Spacing="3"/></ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate>
+                    <Button Classes="swatch-btn" Tag="{Binding}" Click="PaletteSwatch_Click">
+                      <Grid Width="20" Height="20">
+                        <Border Classes="swatch" Background="{Binding Brush}"/>
+                        <Path Data="M1,1 L19,19 M19,1 L1,19" Stroke="Red" StrokeThickness="1.5" IsVisible="{Binding IsPlaceholder}"/>
+                      </Grid>
+                    </Button>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </StackPanel>
+          </StackPanel>
+        </GroupBox>
+
+        <GroupBox Header="Shiny sprites">
+          <StackPanel Spacing="10" Margin="4">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <TextBlock Text="Sprite sheet" Width="80" VerticalAlignment="Center" FontWeight="SemiBold"
+                         ToolTip.Tip="Take the shiny colours from a shiny sheet."/>
+              <Button Classes="sprite-btn" Content="Import female…" controls:Icon.Key="import" Click="ImportFemaleShinySheet_Click" IsVisible="{Binding ShowFemaleShinyFormImport}"/>
+              <Button Classes="sprite-btn" Content="Export female…" controls:Icon.Key="export" Click="ExportFemaleShinySheet_Click"/>
+              <Button Classes="sprite-btn" Content="Import male…" controls:Icon.Key="import" Click="ImportMaleShinySheet_Click" IsVisible="{Binding !IsHgEngineSourced}"/>
+              <Button Classes="sprite-btn" Content="Export male…" controls:Icon.Key="export" Click="ExportMaleShinySheet_Click"/>
+              <Border Width="1" Margin="4,2" Background="{DynamicResource Editor.Border}" IsVisible="{Binding CanUseFullSheet}"/>
+              <Button Classes="sprite-btn" Content="Import both…" controls:Icon.Key="import" Click="ImportShinyFullSheet_Click" IsVisible="{Binding ShowShinyFullSheetImport}"
+                      ToolTip.Tip="Take the shiny colours from a shiny sheet."/>
+              <Button Classes="sprite-btn" Content="Export both…" controls:Icon.Key="export" Click="ExportShinyFullSheet_Click" IsVisible="{Binding CanUseFullSheet}"/>
+            </StackPanel>
+            <controls:HelpTip Text="Shiny colours come from the male back sprite" IsVisible="{Binding IsHgEngineSourced}" HorizontalAlignment="Left"/>
+            <Grid ColumnDefinitions="*,8,*,8,*,8,*">
+              <StackPanel Grid.Column="0" Spacing="4" HorizontalAlignment="Center">
+                <TextBlock Classes="header" Text="Female back (shiny)"/>
+                <Border Classes="sprite-cell">
+                  <Image Classes="sprite-img" Source="{Binding FemaleBackShiny}"/>
+                </Border>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="2" IsVisible="{Binding FemaleBackShinyFrame.ShowFrameToggle}">
+                  <Button Classes="frame-btn" Classes.selected="{Binding FemaleBackShinyFrame.IsFrame1}" Content="1" Click="FemaleBackShinyFrame1_Click" ToolTip.Tip="Show frame 1"/>
+                  <Button Classes="frame-btn" Classes.selected="{Binding FemaleBackShinyFrame.IsFrame2}" Content="2" Click="FemaleBackShinyFrame2_Click" ToolTip.Tip="Show frame 2"/>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="4">
+                  <Button Classes="sprite-btn" Content="Import…" controls:Icon.Key="import" Click="ImportFemaleBackShiny_Click" IsVisible="{Binding ShowFemaleShinyFormImport}"
+                          ToolTip.Tip="Take the shiny colours from a shiny image."/>
+                  <Button Classes="sprite-btn" Content="Export…" controls:Icon.Key="export" Click="ExportFemaleBackShiny_Click"/>
+                </StackPanel>
+              </StackPanel>
+              <StackPanel Grid.Column="2" Spacing="4" HorizontalAlignment="Center">
+                <TextBlock Classes="header" Text="Male back (shiny)"/>
+                <Border Classes="sprite-cell">
+                  <Image Classes="sprite-img" Source="{Binding MaleBackShiny}"/>
+                </Border>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="2" IsVisible="{Binding MaleBackShinyFrame.ShowFrameToggle}">
+                  <Button Classes="frame-btn" Classes.selected="{Binding MaleBackShinyFrame.IsFrame1}" Content="1" Click="MaleBackShinyFrame1_Click" ToolTip.Tip="Show frame 1"/>
+                  <Button Classes="frame-btn" Classes.selected="{Binding MaleBackShinyFrame.IsFrame2}" Content="2" Click="MaleBackShinyFrame2_Click" ToolTip.Tip="Show frame 2"/>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="4">
+                  <Button Classes="sprite-btn" Content="Import…" controls:Icon.Key="import" Click="ImportMaleBackShiny_Click"
+                          ToolTip.Tip="Take the shiny colours from a shiny image."/>
+                  <Button Classes="sprite-btn" Content="Export…" controls:Icon.Key="export" Click="ExportMaleBackShiny_Click"/>
+                </StackPanel>
+              </StackPanel>
+              <StackPanel Grid.Column="4" Spacing="4" HorizontalAlignment="Center">
+                <TextBlock Classes="header" Text="Female front (shiny)"/>
+                <Border Classes="sprite-cell">
+                  <Image Classes="sprite-img" Source="{Binding FemaleFrontShiny}"/>
+                </Border>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="2" IsVisible="{Binding FemaleFrontShinyFrame.ShowFrameToggle}">
+                  <Button Classes="frame-btn" Classes.selected="{Binding FemaleFrontShinyFrame.IsFrame1}" Content="1" Click="FemaleFrontShinyFrame1_Click" ToolTip.Tip="Show frame 1"/>
+                  <Button Classes="frame-btn" Classes.selected="{Binding FemaleFrontShinyFrame.IsFrame2}" Content="2" Click="FemaleFrontShinyFrame2_Click" ToolTip.Tip="Show frame 2"/>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="4">
+                  <Button Classes="sprite-btn" Content="Import…" controls:Icon.Key="import" Click="ImportFemaleFrontShiny_Click" IsVisible="{Binding ShowFemaleShinyFormImport}"
+                          ToolTip.Tip="Take the shiny colours from a shiny image."/>
+                  <Button Classes="sprite-btn" Content="Export…" controls:Icon.Key="export" Click="ExportFemaleFrontShiny_Click"/>
+                </StackPanel>
+              </StackPanel>
+              <StackPanel Grid.Column="6" Spacing="4" HorizontalAlignment="Center">
+                <TextBlock Classes="header" Text="Male front (shiny)"/>
+                <Border Classes="sprite-cell">
+                  <Image Classes="sprite-img" Source="{Binding MaleFrontShiny}"/>
+                </Border>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="2" IsVisible="{Binding MaleFrontShinyFrame.ShowFrameToggle}">
+                  <Button Classes="frame-btn" Classes.selected="{Binding MaleFrontShinyFrame.IsFrame1}" Content="1" Click="MaleFrontShinyFrame1_Click" ToolTip.Tip="Show frame 1"/>
+                  <Button Classes="frame-btn" Classes.selected="{Binding MaleFrontShinyFrame.IsFrame2}" Content="2" Click="MaleFrontShinyFrame2_Click" ToolTip.Tip="Show frame 2"/>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="4">
+                  <Button Classes="sprite-btn" Content="Import…" controls:Icon.Key="import" Click="ImportMaleFrontShiny_Click" IsVisible="{Binding !IsHgEngineSourced}"
+                          ToolTip.Tip="Take the shiny colours from a shiny image."/>
+                  <Button Classes="sprite-btn" Content="Export…" controls:Icon.Key="export" Click="ExportMaleFrontShiny_Click"/>
+                </StackPanel>
+              </StackPanel>
+            </Grid>
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <TextBlock Text="Palette" Width="52" VerticalAlignment="Center" FontWeight="SemiBold"/>
+              <ItemsControl ItemsSource="{Binding ShinySwatches}">
+                <ItemsControl.ItemsPanel>
+                  <ItemsPanelTemplate><StackPanel Orientation="Horizontal" Spacing="3"/></ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate>
+                    <Button Classes="swatch-btn" Tag="{Binding}" Click="PaletteSwatch_Click">
+                      <Grid Width="20" Height="20">
+                        <Border Classes="swatch" Background="{Binding Brush}"/>
+                        <Path Data="M1,1 L19,19 M19,1 L1,19" Stroke="Red" StrokeThickness="1.5" IsVisible="{Binding IsPlaceholder}"/>
+                      </Grid>
+                    </Button>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </StackPanel>
+          </StackPanel>
+        </GroupBox>
+
+        <GroupBox Header="Follower" IsVisible="{Binding ShowFollower}">
+          <StackPanel Spacing="10" Margin="4">
+            <TextBlock Text="{Binding FollowerNote}" IsVisible="{Binding HasFollowerNote}" FontStyle="Italic" TextWrapping="Wrap"/>
+            <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding HasFollowerModels}">
+              <ComboBox ItemsSource="{Binding FollowerModelNames}" SelectedIndex="{Binding FollowerModelIndex}"
+                        IsVisible="{Binding HasFollowerModelChoice}" MinWidth="120"/>
+              <Button Content="Open in Overworld editor" controls:Icon.Key="OpenLink" Click="OpenFollowerInOverworldEditor_Click"/>
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding HasFollowerModels}">
+              <StackPanel Spacing="4">
+                <Border Classes="sprite-cell">
+                  <controls:OverworldSpriteView Entry="{Binding FollowerSpriteEntry}" Facing="1" Scale="0"/>
+                </Border>
+                <TextBlock Classes="header" Text="Down"/>
+              </StackPanel>
+              <StackPanel Spacing="4">
+                <Border Classes="sprite-cell">
+                  <controls:OverworldSpriteView Entry="{Binding FollowerSpriteEntry}" Facing="0" Scale="0"/>
+                </Border>
+                <TextBlock Classes="header" Text="Up"/>
+              </StackPanel>
+              <StackPanel Spacing="4">
+                <Border Classes="sprite-cell">
+                  <controls:OverworldSpriteView Entry="{Binding FollowerSpriteEntry}" Facing="2" Scale="0"/>
+                </Border>
+                <TextBlock Classes="header" Text="Left"/>
+              </StackPanel>
+              <StackPanel Spacing="4">
+                <Border Classes="sprite-cell">
+                  <controls:OverworldSpriteView Entry="{Binding FollowerSpriteEntry}" Facing="3" Scale="0"/>
+                </Border>
+                <TextBlock Classes="header" Text="Right"/>
+              </StackPanel>
+            </StackPanel>
+          </StackPanel>
+        </GroupBox>
+
+      </StackPanel>
+    </ScrollViewer>
+  </DockPanel>
+</UserControl>

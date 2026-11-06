@@ -1,0 +1,57 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:controls="clr-namespace:DSPRE.Avalonia.Controls"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:DSPRE.Avalonia.ViewModels.Pokemon"
+             x:Class="DSPRE.Avalonia.Views.Pokemon.WildHeldItemOddsView"
+             x:DataType="vm:WildHeldItemOddsViewModel">
+  <Design.DataContext>
+    <vm:WildHeldItemOddsViewModel/>
+  </Design.DataContext>
+
+  <DockPanel>
+    <controls:EditorToolbar>
+        <Button Content="Save" controls:Icon.Key="saveButton" Click="Save_Click" IsEnabled="{Binding HasUnsavedChanges}"/>
+        <Button Content="Discard" controls:Icon.Key="resetIcon" Click="Discard_Click" IsEnabled="{Binding HasUnsavedChanges}"/>
+        <controls:UndoRedoButtons/>
+    </controls:EditorToolbar>
+
+    <StackPanel Margin="12" Spacing="18">
+      <StackPanel x:Name="NormalOdds" Spacing="6">
+        <TextBlock Text="Wild Pokémon" FontWeight="SemiBold"/>
+        <controls:ProportionBar Parts="{Binding NormalParts}" HorizontalAlignment="Stretch"/>
+        <WrapPanel ItemSpacing="16" LineSpacing="6">
+          <StackPanel Orientation="Horizontal" Spacing="6">
+            <TextBlock Text="No item" VerticalAlignment="Center"/>
+            <NumericUpDown Value="{Binding NormalNone}" Minimum="0" Maximum="100" FormatString="0'%'" Width="110"/>
+          </StackPanel>
+          <StackPanel Orientation="Horizontal" Spacing="6">
+            <TextBlock Text="Common" VerticalAlignment="Center"/>
+            <NumericUpDown Value="{Binding NormalCommon}" Minimum="0" Maximum="{Binding NormalCommonMax}" FormatString="0'%'" Width="110"/>
+          </StackPanel>
+          <StackPanel Orientation="Horizontal" Spacing="6">
+            <TextBlock Text="Rare" VerticalAlignment="Center"/>
+            <TextBlock Text="{Binding NormalRare}" VerticalAlignment="Center" FontWeight="SemiBold" ToolTip.Tip="Whatever is left"/>
+          </StackPanel>
+        </WrapPanel>
+      </StackPanel>
+      <StackPanel x:Name="EyesOdds" Spacing="6">
+        <TextBlock Text="With a Compound Eyes lead" FontWeight="SemiBold" ToolTip.Tip="When the lead Pokémon has Compound Eyes"/>
+        <controls:ProportionBar Parts="{Binding EyesParts}" HorizontalAlignment="Stretch"/>
+        <WrapPanel ItemSpacing="16" LineSpacing="6">
+          <StackPanel Orientation="Horizontal" Spacing="6">
+            <TextBlock Text="No item" VerticalAlignment="Center"/>
+            <NumericUpDown Value="{Binding EyesNone}" Minimum="0" Maximum="100" FormatString="0'%'" Width="110"/>
+          </StackPanel>
+          <StackPanel Orientation="Horizontal" Spacing="6">
+            <TextBlock Text="Common" VerticalAlignment="Center"/>
+            <NumericUpDown Value="{Binding EyesCommon}" Minimum="0" Maximum="{Binding EyesCommonMax}" FormatString="0'%'" Width="110"/>
+          </StackPanel>
+          <StackPanel Orientation="Horizontal" Spacing="6">
+            <TextBlock Text="Rare" VerticalAlignment="Center"/>
+            <TextBlock Text="{Binding EyesRare}" VerticalAlignment="Center" FontWeight="SemiBold" ToolTip.Tip="Whatever is left"/>
+          </StackPanel>
+        </WrapPanel>
+      </StackPanel>
+    </StackPanel>
+  </DockPanel>
+</UserControl>

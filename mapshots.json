@@ -1,0 +1,42 @@
+{
+  "defaults": {
+    "width": 0,
+    "height": 0,
+    "pixelsPerTile": 16,
+    "pitch": 50,
+    "yaw": 0,
+    "frame": "content",
+    "background": "transparent",
+    "shadows": true,
+    "lighting": true,
+    "hideMaterials": [ "lambert1" ],
+    "gap": 10
+  },
+  "maps": [
+    {
+      "id": 47,
+      "file": "OreburghGym.png"
+    },
+    {
+      "id": 122,
+      "file": "PastoriaGym.png"
+    },
+    {
+      "id": 133,
+      "file": "VeilstoneGym.png",
+      "hideMaterials": [ "lambert1", "lambert8" ]
+    },
+    {
+      "id": 156,
+      "file": "SunyshoreGym.png",
+      "stack": [ 156, 155, 154 ],
+      "gap": 10
+    },
+    {
+      "id": 220,
+      "file": "SpearPillar.png",
+      "width": 512,
+      "height": 1024
+    }
+  ]
+}

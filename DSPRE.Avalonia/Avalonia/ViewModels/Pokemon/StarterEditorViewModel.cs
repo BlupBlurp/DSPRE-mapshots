@@ -1,0 +1,464 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Collections.ObjectModel;
+using System.ComponentModel;
+using System.Runtime.CompilerServices;
+using Avalonia.Controls;
+using IEditorWithUnsavedChanges = global::DSPRE.Editors.IEditorWithUnsavedChanges;
+using DSPRE.ROMFiles;
+using Avalonia.Media.Imaging;
+
+namespace DSPRE.Avalonia.ViewModels.Pokemon
+{
+    public class StarterEditorViewModel : INotifyPropertyChanged, IEditorWithUnsavedChanges, DSPRE.Avalonia.ISupportsUndo, IDetachable
+    {
+        public event PropertyChangedEventHandler PropertyChanged;
+        private void OnPropertyChanged([CallerMemberName] string n = null)
+            => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(n));
+        private bool Set<T>(ref T f, T v, [CallerMemberName] string n = null)
+        {
+            if (Equals(f, v)) return false;
+            f = v;
+            OnPropertyChanged(n);
+            return true;
+        }
+
+        // ── IEditorWithUnsavedChanges ───────────────────────────────────────────
+        private bool _dirty;
+        public bool HasUnsavedChanges => _dirty;
+        public string UnsavedChangesDescription => "Starter Pokémon";
+        void IEditorWithUnsavedChanges.SaveChanges() => SaveChanges();
+        public void DiscardChanges()
+        {
+            if (!_dirty || _saved == null) return;
+            _history.Reset(_saved);
+            _lastCaptureUtc = System.DateTime.MinValue;
+            ApplyState(_saved);
+        }
+
+        // What is on disk, for Discard and for telling whether an edit or undo left anything changed.
+        private Snapshot _saved;
+        private void MarkClean() { _saved = TakeSnapshot(); }
+
+        // ── Undo / redo (ISupportsUndo) ─────────────────────────────────────────
+        // Only the field values are snapshotted; the byte patches (ASM/rival scripts/text) run once, on
+        // Save, not per undo step. A record, so states compare by value.
+        private sealed record Snapshot(int S1, int S2, int S3, int HeldItem, int Level);
+        private readonly DSPRE.Avalonia.UndoHistory<Snapshot> _history = new();
+        private System.DateTime _lastCaptureUtc = System.DateTime.MinValue;
+        private const int CoalesceMs = 500;
+
+        public bool CanUndo => _history.CanUndo;
+        public bool CanRedo => _history.CanRedo;
+        public void Undo() { if (_history.CanUndo) ApplyState(_history.Undo()); }
+        public void Redo() { if (_history.CanRedo) ApplyState(_history.Redo()); }
+        private void RaiseUndoState() { OnPropertyChanged(nameof(CanUndo)); OnPropertyChanged(nameof(CanRedo)); }
+
+        private Snapshot TakeSnapshot() => new Snapshot(_starter1, _starter2, _starter3, _heldItem, _starterLevel);
+
+        private void ApplyState(Snapshot snap)
+        {
+            if (snap == null) return;
+            _loading = true;
+            _starter1 = snap.S1; OnPropertyChanged(nameof(Starter1));
+            _starter2 = snap.S2; OnPropertyChanged(nameof(Starter2));
+            _starter3 = snap.S3; OnPropertyChanged(nameof(Starter3));
+            _heldItem = snap.HeldItem; OnPropertyChanged(nameof(HeldItem));
+            _starterLevel = snap.Level; OnPropertyChanged(nameof(StarterLevel));
+            RefreshStarterIcon(1); RefreshStarterIcon(2); RefreshStarterIcon(3); RefreshHeldItemIcon();
+            _loading = false;
+
+            _dirty = !Equals(snap, _saved);
+            OnPropertyChanged(nameof(HasUnsavedChanges));
+            RaiseUndoState();
+        }
+
+        private void RecordUndoSnapshot()
+        {
+            if (_loading) return;
+            bool coalesce = (System.DateTime.UtcNow - _lastCaptureUtc).TotalMilliseconds < CoalesceMs;
+            _history.Capture(TakeSnapshot(), coalesce);
+            _lastCaptureUtc = System.DateTime.UtcNow;
+            RaiseUndoState();
+        }
+
+        // ── Lists (ComboBox sources) ─────────────────────────────────────────────
+        public ObservableCollection<string> PokemonNames { get; } = new();
+        public ObservableCollection<string> ItemNames { get; } = new();
+
+        // ── Title ─────────────────────────────────────────────────────────────
+        private string _title = "Starter Pokémon editor";
+        public string Title { get => _title; private set => Set(ref _title, value); }
+
+        // ── Starter species / held item ──────────────────────────────────────
+        private int _starter1, _starter2, _starter3, _heldItem;
+        public int Starter1 { get => _starter1; set { if (Set(ref _starter1, value)) { MarkDirty(); RefreshStarterIcon(1); } } }
+        public int Starter2 { get => _starter2; set { if (Set(ref _starter2, value)) { MarkDirty(); RefreshStarterIcon(2); } } }
+        public int Starter3 { get => _starter3; set { if (Set(ref _starter3, value)) { MarkDirty(); RefreshStarterIcon(3); } } }
+        public int HeldItem { get => _heldItem; set { if (Set(ref _heldItem, value)) { MarkDirty(); RefreshHeldItemIcon(); } } }
+
+        // ── Icons ─────────────────────────────────────────────────────────────
+        private readonly PokemonIconCache _pokemonIcons = new();
+        private global::Avalonia.Media.IImage _starter1Icon, _starter2Icon, _starter3Icon, _heldItemIcon;
+        public global::Avalonia.Media.IImage Starter1Icon { get => _starter1Icon; private set => Set(ref _starter1Icon, value); }
+        public global::Avalonia.Media.IImage Starter2Icon { get => _starter2Icon; private set => Set(ref _starter2Icon, value); }
+        public global::Avalonia.Media.IImage Starter3Icon { get => _starter3Icon; private set => Set(ref _starter3Icon, value); }
+        public global::Avalonia.Media.IImage HeldItemIcon { get => _heldItemIcon; private set => Set(ref _heldItemIcon, value); }
+
+        private void RefreshStarterIcon(int slot)
+        {
+            Bitmap icon = _pokemonIcons.Get(slot == 1 ? _starter1 : slot == 2 ? _starter2 : _starter3);
+            if (slot == 1) Starter1Icon = icon;
+            else if (slot == 2) Starter2Icon = icon;
+            else Starter3Icon = icon;
+        }
+
+        private void RefreshHeldItemIcon()
+        {
+            if (!IsHeldItemSupported || _heldItem <= 0) { HeldItemIcon = null; return; }
+            try
+            {
+                RawImage raw = DSUtils.GetItemPicRaw(_heldItem, 32, 32);
+                HeldItemIcon = raw != null ? DSPRE.Avalonia.ImageConverter.ToAvaloniaBitmap(raw) : null;
+            }
+            catch (Exception ex) { AppLogger.WarnOnce("StarterEditorViewModel.RefreshHeldItemIcon", ex); HeldItemIcon = null; }
+        }
+
+        // Diamond and Pearl set the held item and the level inside a script command, and DSPRE cannot
+        // read those scripts reliably yet, so it says where they are instead of offering a control that
+        // would write to the wrong place. Platinum keeps the same layout but does parse.
+        private static bool IsDiamondOrPearl => RomInfo.GameFamily == RomInfo.GameFamilies.DP;
+
+        // Platinum keeps the level and the held item in the script that hands the starter over, so
+        // both are editable there once that command has been found.
+        private StarterRotomSource.Match _command;
+
+        private int _starterLevel = 5;
+        public int StarterLevel
+        {
+            get => _starterLevel;
+            set { if (Set(ref _starterLevel, value)) { MarkDirty(); } }
+        }
+
+        public bool IsLevelSupported => _command != null;
+
+        /// <summary>Where the starter is handed over, so it is clear what the editor is about to change.</summary>
+        public string CommandLocation => string.IsNullOrEmpty(_command?.Where) ? null : char.ToUpperInvariant(_command.Where[0]) + _command.Where.Substring(1);
+        public bool HasCommandLocation => _command != null;
+
+        /// <summary>HGSS keeps its starters in the ARM9, so there is no script command to point at.</summary>
+        public bool CanManageCommand => StarterRotomSource.IsAvailable && IsHeldItemSupported;
+
+        /// <summary>HGSS starters never carry a held item, and DP keep theirs out of reach.</summary>
+        public bool IsHeldItemSupported =>
+            RomInfo.GameFamily != RomInfo.GameFamilies.HGSS && !IsDiamondOrPearl;
+
+        /// <summary>Shown instead of the held item and level fields on Diamond and Pearl.</summary>
+        public bool HasScriptNote => IsDiamondOrPearl;
+
+        public string ScriptNote
+        {
+            get
+            {
+                if (!IsDiamondOrPearl) return null;
+                int file = RomInfo.StarterHeldItemScriptFileID;
+                int number = DSPRE.ROMFiles.StarterPokemonData.GetStarterScriptNumber();
+                string where = number > 0
+                    ? $"script file {file}, script {number}"
+                    : $"script file {file}";
+                return "The starter's held item and level are set by the GivePokemon command in "
+                     + where + ". Edit them there; this editor only changes the species.";
+            }
+        }
+
+        // ── Loading flag (prevents handlers from firing during load) ────────────
+        private bool _loading;
+
+        // ── Constructors ──────────────────────────────────────────────────────
+        public StarterEditorViewModel()
+        {
+            _loading = true;
+
+            if (Design.IsDesignMode)
+            {
+                for (int i = 0; i < 10; i++) PokemonNames.Add($"Pokémon {i}");
+                for (int i = 0; i < 10; i++) ItemNames.Add($"Item {i}");
+                Starter1 = 1; Starter2 = 2; Starter3 = 3; HeldItem = 0;
+                _loading = false;
+                return;
+            }
+
+            DSUtils.TryUnpackNarcs(new System.Collections.Generic.List<RomInfo.DirNames> { RomInfo.DirNames.MonIcons, RomInfo.DirNames.ItemIcons });
+            RomInfo.SetMonIconsPalTableAddress();
+
+            foreach (string n in RomInfo.GetPokemonNames()) PokemonNames.Add(n);
+            foreach (string n in RomInfo.GetItemNames()) ItemNames.Add(n);
+            ReloadFromRom();
+
+            AppEvents.NamesChanged -= OnNamesChanged;
+            AppEvents.NamesChanged += OnNamesChanged;
+            _iconsSaved = AppEvents.WhenSaved(() => { RefreshStarterIcon(1); RefreshStarterIcon(2); RefreshStarterIcon(3); RefreshHeldItemIcon(); },
+                                              RomInfo.DirNames.MonIcons, RomInfo.DirNames.ItemIcons);
+
+            _loading = false;
+        }
+
+        private void ReloadFromRom()
+        {
+            int[] starters = StarterPokemonData.GetStarters();
+            _starter1 = starters[0];
+            _starter2 = starters[1];
+            _starter3 = starters[2];
+            _heldItem = IsHeldItemSupported ? StarterPokemonData.GetHeldItem() : 0;
+            OnPropertyChanged(nameof(Starter1));
+            OnPropertyChanged(nameof(Starter2));
+            OnPropertyChanged(nameof(Starter3));
+            OnPropertyChanged(nameof(HeldItem));
+            OnPropertyChanged(nameof(IsHeldItemSupported));
+            OnPropertyChanged(nameof(HasScriptNote));
+            OnPropertyChanged(nameof(ScriptNote));
+            RefreshStarterIcon(1); RefreshStarterIcon(2); RefreshStarterIcon(3); RefreshHeldItemIcon();
+
+            LocateStarterCommand();
+
+            MarkClean();
+            _dirty = false;
+            OnPropertyChanged(nameof(HasUnsavedChanges));
+
+            _history.Reset(TakeSnapshot());
+            _lastCaptureUtc = System.DateTime.MinValue;
+            RaiseUndoState();
+        }
+
+        /// <summary>
+        /// Finds the command that gives the starter: last time's choice, then the retail spot, and only then a
+        /// read of the whole game. Diamond and Pearl scripts are handled elsewhere.
+        /// </summary>
+        private void LocateStarterCommand()
+        {
+            _command = null;
+            SpeciesEditable = true;
+            CommandsHaveChanged = false;
+
+            if (!IsDiamondOrPearl && StarterRotomSource.IsAvailable)
+            {
+                string remembered = RememberedChoice();
+                _command = StarterRotomSource.FindByKey(remembered)
+                        ?? StarterRotomSource.FindVanilla();
+
+                if (_command == null)
+                {
+                    // The starter is not where it should be, so now it is worth reading the whole game.
+                    List<StarterRotomSource.Match> all = StarterRotomSource.FindAll();
+                    _command = all.FirstOrDefault(c => c.NamedAsStarter);
+
+                    // Say once that the give commands are not what they were, so a romhack that has
+                    // added its own gets a chance to point the editor at the right one.
+                    string now = Fingerprint(all);
+                    CommandsHaveChanged = KnownFingerprint() != null && KnownFingerprint() != now;
+                    RememberFingerprint(now);
+                }
+
+                if (_command != null) StarterLevel = _command.Level;
+            }
+            OnPropertyChanged(nameof(IsLevelSupported));
+            OnPropertyChanged(nameof(CommandLocation));
+            OnPropertyChanged(nameof(HasCommandLocation));
+            OnPropertyChanged(nameof(CanManageCommand));
+        }
+
+        private bool _commandsHaveChanged;
+        /// <summary>Set when the project has gained or lost a give command since the choice was made.</summary>
+        public bool CommandsHaveChanged { get => _commandsHaveChanged; private set => Set(ref _commandsHaveChanged, value); }
+
+        private static string Fingerprint(System.Collections.Generic.IEnumerable<StarterRotomSource.Match> all) =>
+            string.Join(",", all.Select(c => c.Key).OrderBy(k => k, System.StringComparer.Ordinal));
+
+        private static string KnownFingerprint()
+        {
+            Dictionary<string, string> map = SettingsManager.Settings?.StarterCommandFingerprint;
+            return map != null && map.TryGetValue(ProjectKey(), out string f) ? f : null;
+        }
+
+        private static void RememberFingerprint(string fingerprint)
+        {
+            if (SettingsManager.Settings == null || KnownFingerprint() == fingerprint) return;
+            SettingsManager.Settings.StarterCommandFingerprint ??= new System.Collections.Generic.Dictionary<string, string>();
+            SettingsManager.Settings.StarterCommandFingerprint[ProjectKey()] = fingerprint;
+            SettingsManager.Save();
+        }
+
+        private static string ProjectKey() => RomInfo.WorkDir ?? "";
+
+        private static string RememberedChoice()
+        {
+            Dictionary<string, string> map = SettingsManager.Settings?.StarterCommandChoice;
+            return map != null && map.TryGetValue(ProjectKey(), out string key) ? key : null;
+        }
+
+        /// <summary>The dialog's starting state: the candidates, with the current one picked out.</summary>
+        public StarterCommandDialogViewModel NewCommandChoice() => new StarterCommandDialogViewModel(_command);
+
+        /// <summary>
+        /// Takes what the dialog came back with. A script that picks the species itself is allowed,
+        /// but the species dropdowns are switched off: changing them there would do nothing.
+        /// </summary>
+        public void ApplyCommandChoice(StarterCommandDialogViewModel dialog)
+        {
+            if (dialog?.Chosen == null) return;
+            SpeciesEditable = !dialog.SpeciesIsOutOfOurHands;
+            ChooseCommand(dialog.Chosen);
+        }
+
+        private bool _speciesEditable = true;
+        public bool SpeciesEditable { get => _speciesEditable; private set => Set(ref _speciesEditable, value); }
+
+        /// <summary>Remembers which command the user said is the starter, for this project.</summary>
+        public void ChooseCommand(StarterRotomSource.Match chosen)
+        {
+            if (chosen == null || SettingsManager.Settings == null) return;
+            _command = chosen;
+            if (_saved != null) _saved = _saved with { Level = chosen.Level };   // the level this command holds on disk
+            StarterLevel = chosen.Level;
+            SettingsManager.Settings.StarterCommandChoice ??= new System.Collections.Generic.Dictionary<string, string>();
+            SettingsManager.Settings.StarterCommandChoice[ProjectKey()] = chosen.Key;
+            CommandsHaveChanged = false;
+            SettingsManager.Save();
+            OnPropertyChanged(nameof(IsLevelSupported));
+            OnPropertyChanged(nameof(CommandLocation));
+            OnPropertyChanged(nameof(HasCommandLocation));
+        }
+
+        private void OnNamesChanged(object sender, System.EventArgs e)
+        {
+            DSPRE.Avalonia.Data.ListSync.Apply(PokemonNames, RomInfo.GetPokemonNames());
+            DSPRE.Avalonia.Data.ListSync.Apply(ItemNames, RomInfo.GetItemNames());
+        }
+
+        /// <summary>Unsubscribes from app-wide events; call when the editor window closes.</summary>
+        private readonly IDisposable _iconsSaved;
+        public void Detach() { AppEvents.NamesChanged -= OnNamesChanged; _iconsSaved?.Dispose(); }
+
+        // ── Busy state (the rotom work after Save, see FinishSavingAsync) ──
+        private bool _isBusy;
+        public bool IsBusy { get => _isBusy; private set => Set(ref _isBusy, value); }
+        private string _busyText;
+        public string BusyText { get => _busyText; private set => Set(ref _busyText, value); }
+
+        // ── Commands ──────────────────────────────────────────────────────────
+        public void SaveChanges()
+        {
+            int[] newStarters = new[] { Starter1, Starter2, Starter3 };
+            List<int> touchedScripts = new List<int>();
+            // Applying starters also patches the selection scene, the rival's teams and the dialogue,
+            // which a level or held item change has no business touching.
+            bool speciesChanged = _saved == null
+                || newStarters[0] != _saved.S1 || newStarters[1] != _saved.S2 || newStarters[2] != _saved.S3;
+            if (speciesChanged)
+            {
+                if (!StarterPokemonData.ApplyStarters(newStarters, out touchedScripts))
+                {
+                    AppMessages.Error(
+                        "The starter table couldn't be found in this ROM, maybe because another tool changed it. " +
+                        "Nothing was changed.",
+                        "Starter Pokémon editor");
+                    return;
+                }
+            }
+
+            // With the sources in front of us, the held item and the level go through the script the
+            // same way the Script editor saves one: change the line, compile the project. Writing the
+            // bytes instead would be undone the next time that script is compiled.
+            bool throughTheScript = _command != null;
+            if (IsHeldItemSupported && !throughTheScript)
+            {
+                StarterPokemonData.SetHeldItem(HeldItem);
+                if (RomInfo.StarterHeldItemScriptFileID >= 0) touchedScripts.Add(RomInfo.StarterHeldItemScriptFileID);
+            }
+
+            Snapshot before = _saved;
+            MarkClean();
+            _dirty = false;
+            SaveNotice.Saved(UnsavedChangesDescription);
+            OnPropertyChanged(nameof(HasUnsavedChanges));
+            AppLogger.Debug($"StarterEditor: Saved starters [{Starter1}, {Starter2}, {Starter3}].");
+            _history.MarkSaved();
+            RaiseUndoState();
+
+            // The species bytes above are already on disk. What is left shells out to rotom, and
+            // awaiting it here would freeze the app: SaveChanges runs straight off a Click handler.
+            if ((touchedScripts.Count > 0 && RomInfo.HasRotomProject) || throughTheScript)
+                _ = FinishSavingAsync(touchedScripts, throughTheScript, before);
+        }
+
+        /// <summary>
+        /// The two rotom steps, one after the other and never at the same time: one turns binaries back
+        /// into text, the other turns text into binaries, and running both at once would have them
+        /// overwrite each other. Both shell out to rotom, so this stays off the UI thread.
+        /// </summary>
+        private async System.Threading.Tasks.Task FinishSavingAsync(
+            System.Collections.Generic.List<int> touchedScripts, bool throughTheScript, Snapshot before)
+        {
+            IsBusy = true;
+            try
+            {
+                if (throughTheScript)
+                {
+                    BusyText = "Saving the script…";
+                    if (!await SaveThroughTheScriptAsync() && before != null)
+                    {
+                        // The level and item are still the old ones on disk, so they count as unsaved again.
+                        _saved = _saved with { HeldItem = before.HeldItem, Level = before.Level };
+                        _dirty = !Equals(TakeSnapshot(), _saved);
+                        OnPropertyChanged(nameof(HasUnsavedChanges));
+                    }
+                }
+                if (touchedScripts.Count > 0 && RomInfo.HasRotomProject)
+                {
+                    BusyText = "Reparsing scripts…";
+                    try { await StarterPokemonData.RefreshRotomSourcesAsync(touchedScripts); }
+                    catch (Exception ex) { AppLogger.Warn("StarterEditor: .rotom refresh failed: " + ex.Message); }
+                }
+            }
+            finally
+            {
+                IsBusy = false;
+                BusyText = null;
+            }
+        }
+
+        /// <summary>
+        /// Rewrites the give command's level and held item and compiles, as the Script editor's Save does, and
+        /// reports any failure.
+        /// </summary>
+        private async System.Threading.Tasks.Task<bool> SaveThroughTheScriptAsync()
+        {
+            StarterRotomSource.Match command = _command;
+            int item = HeldItem;
+            int level = StarterLevel;
+            string itemName = item > 0 && item < ItemNames.Count
+                ? StarterRotomSource.ItemToken(ItemNames[item]) : "ITEM_NONE";
+
+            try
+            {
+                string failure = await StarterRotomSource.SaveAsync(command, level, itemName, item);
+                if (failure == null) return true;
+                AppMessages.Error(failure, "Starter Pokémon editor");
+            }
+            catch (Exception ex)
+            {
+                AppMessages.Error("The script couldn't be saved: " + ex.Message, "Starter Pokémon editor");
+            }
+            return false;
+        }
+
+        private void MarkDirty()
+        {
+            if (_loading) return;
+            RecordUndoSnapshot();
+            _dirty = !Equals(TakeSnapshot(), _saved);
+            OnPropertyChanged(nameof(HasUnsavedChanges));
+        }
+    }
+}

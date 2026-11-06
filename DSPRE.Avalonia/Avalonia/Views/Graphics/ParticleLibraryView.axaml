@@ -1,0 +1,39 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="clr-namespace:DSPRE.Avalonia.Controls"
+        xmlns:vm="clr-namespace:DSPRE.Avalonia.ViewModels.Graphics"
+        x:Class="DSPRE.Avalonia.Views.Graphics.ParticleLibraryView"
+        x:DataType="vm:ParticleLibraryViewModel"
+        Title="Particles"
+        Width="640" Height="680" MinWidth="460" MinHeight="400"
+        WindowStartupLocation="CenterScreen">
+
+  <Design.DataContext>
+    <vm:ParticleLibraryViewModel/>
+  </Design.DataContext>
+
+  <DockPanel>
+    <controls:EditorToolbar>
+        <ComboBox x:Name="CategoryPicker" ItemsSource="{Binding Categories}" SelectedItem="{Binding Category}" Width="200"/>
+        <TextBox x:Name="ParticleSearch" Text="{Binding Search}" PlaceholderText="Search by name or file number" Width="220"/>
+        <Button x:Name="OpenButton" Content="Open" controls:Icon.Key="OpenLink" Click="Open_Click"/>
+    </controls:EditorToolbar>
+
+  <DockPanel Margin="10">
+    <TextBlock DockPanel.Dock="Bottom" Margin="0,8,0,0" Text="{Binding StatusText}" FontSize="12"
+               Foreground="{DynamicResource Editor.Subtle}" VerticalAlignment="Center"/>
+
+    <ListBox x:Name="ParticleList" ItemsSource="{Binding Shown}" SelectedIndex="{Binding SelectedIndex}"
+             ScrollViewer.HorizontalScrollBarVisibility="Disabled" DoubleTapped="List_DoubleTapped">
+      <ListBox.ItemTemplate>
+        <DataTemplate x:DataType="vm:ParticleFileRow">
+          <StackPanel>
+            <TextBlock Text="{Binding Title}" TextWrapping="Wrap"/>
+            <TextBlock Text="{Binding Detail}" FontSize="11" TextWrapping="Wrap" Foreground="{DynamicResource Editor.Subtle}"/>
+          </StackPanel>
+        </DataTemplate>
+      </ListBox.ItemTemplate>
+    </ListBox>
+  </DockPanel>
+  </DockPanel>
+</Window>

@@ -1,0 +1,303 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:DSPRE.Avalonia.ViewModels.Pokemon"
+        xmlns:views="clr-namespace:DSPRE.Avalonia.Views.Pokemon"
+        xmlns:viewsbattle="clr-namespace:DSPRE.Avalonia.Views.Battle"
+        xmlns:controls="clr-namespace:DSPRE.Avalonia.Controls"
+        x:Class="DSPRE.Avalonia.Views.Pokemon.PokemonEditorView"
+        x:DataType="vm:PokemonEditorViewModel"
+        Width="1080" Height="860" MinWidth="900" MinHeight="640"
+        WindowStartupLocation="CenterScreen">
+  <Design.DataContext>
+    <vm:PokemonEditorViewModel/>
+  </Design.DataContext>
+
+  <Window.Styles>
+    <Style Selector="TextBlock.lbl">
+      <Setter Property="VerticalAlignment" Value="Center"/>
+      <Setter Property="Margin" Value="0,0,6,0"/>
+    </Style>
+  </Window.Styles>
+  <DockPanel>
+    <controls:EditorToolbar>
+        <Grid x:Name="SpeciesBar" controls:EditorToolbar.Slot="Picker" ColumnDefinitions="36,8,380">
+          <Border Grid.Column="0" Width="36" Height="36" Background="#E0E0E0" CornerRadius="4">
+            <Image Source="{Binding MonIconBitmap}" Stretch="Uniform"/>
+          </Border>
+          <controls:IdNameSelector Grid.Column="2" Value="{Binding SelectedMonIndex}" Maximum="{Binding MaxMonIndex}" Names="{Binding PokemonNames}"
+                                   NumberWidth="115" TextElement.FontSize="13" VerticalAlignment="Center"/>
+        </Grid>
+        <Button x:Name="SaveButton" Content="Save" controls:Icon.Key="saveButton" Click="Save_Click" IsEnabled="{Binding HasUnsavedChanges}"
+                ToolTip.Tip="Save every tab (Ctrl+S)"/>
+        <Button Content="Discard" controls:Icon.Key="resetIcon" Click="Discard_Click" IsEnabled="{Binding HasUnsavedChanges}"/>
+        <controls:UndoRedoButtons/>
+        <Button Content="Add…" controls:Icon.Key="addIcon" Click="AddSpecies_Click" IsVisible="{Binding ShowHgEngineBanner}" IsEnabled="{Binding CanAddSpecies}"
+                ToolTip.Tip="Add a new base species. It is created when you save."/>
+        <Button Content="Cry" controls:Icon.Key="speaker" Click="PlayCry_Click" ToolTip.Tip="Play cry"/>
+        <Button Content="Edit cry" controls:Icon.Key="pencil" Click="EditCry_Click" ToolTip.Tip="Open in the Audio editor"/>
+    </controls:EditorToolbar>
+    <Border DockPanel.Dock="Top" Padding="8,3" Background="#2D6A4F" IsVisible="{Binding ShowHgEngineBanner}">
+      <TextBlock Text="{Binding HgEngineBanner}" Foreground="White" FontSize="12"/>
+    </Border>
+    <Border DockPanel.Dock="Top" Padding="8,3" IsVisible="{Binding HasPendingSpecies}">
+      <TextBlock Text="{Binding PendingSpeciesBanner}" Foreground="{DynamicResource Editor.Warn}" FontSize="12" FontWeight="SemiBold"/>
+    </Border>
+    <TabControl x:Name="PokemonTabs" Margin="4,2,4,4" SelectedIndex="{Binding SelectedTabIndex}">
+      <TabItem Header="Personal data">
+        <views:PersonalDataEditorView DataContext="{Binding PersonalVM}"/>
+      </TabItem>
+      <TabItem Header="Learnset">
+        <DockPanel Margin="8" DataContext="{Binding LearnsetVM}">
+          <Border DockPanel.Dock="Top" Margin="0,0,0,4">
+            <StackPanel Orientation="Horizontal" Spacing="12">
+              <TextBlock Text="{Binding EntryCount, StringFormat=Entries: {0}}" VerticalAlignment="Center"/>
+              <Button Content="Import CSV…" controls:Icon.Key="import" Click="Learnset_Import_Click"/>
+              <Button Content="Export CSV…" controls:Icon.Key="export" Click="Learnset_Export_Click"/>
+              <Button Content="Bulk edit all" controls:Icon.Key="tableEditor" Click="Learnset_BulkEdit_Click"/>
+              <TextBlock Text="Over the usual 20 moves" IsVisible="{Binding ExceedsVanillaLimit}" Foreground="{DynamicResource Editor.Bad}" FontWeight="Bold" VerticalAlignment="Center"/>
+              <TextBlock Text="{Binding StatusText}" Foreground="{DynamicResource Editor.Bad}" FontStyle="Italic" VerticalAlignment="Center"/>
+            </StackPanel>
+          </Border>
+          <Border DockPanel.Dock="Bottom" Padding="0,6,0,0">
+            <Grid ColumnDefinitions="Auto,8,80,8,*,8,Auto,4,Auto,4,Auto,4,Auto,4,Auto">
+              <TextBlock Grid.Column="0" Text="Level" Classes="lbl"/>
+              <NumericUpDown Grid.Column="2" Value="{Binding AddLevel}" Minimum="1" Maximum="100" FormatString="0" Width="80"/>
+              <controls:FusionAutoCompleteBox controls:EditorLink.To="Move" Grid.Column="4" ItemsSource="{Binding MoveNames}" SelectedIndex="{Binding AddMoveIndex}" HorizontalAlignment="Stretch"/>
+              <Button Grid.Column="6"  Content="Add" controls:Icon.Key="addIcon"    Click="Learnset_Add_Click"      MinWidth="60" IsEnabled="{Binding CanAdd}"/>
+              <Button Grid.Column="8"  Content="Replace" controls:Icon.Key="pencil" Click="Learnset_Replace_Click" MinWidth="60" IsEnabled="{Binding CanEdit}"
+                      ToolTip.Tip="Puts this level and move in place of the selected row"/>
+              <Button Grid.Column="10" Content="Delete" controls:Icon.Key="deleteIcon" Click="Learnset_Delete_Click"   MinWidth="60" IsEnabled="{Binding CanEdit}"/>
+              <Button Grid.Column="12" Content="Up" controls:Icon.Key="arrowup"     Click="Learnset_MoveUp_Click"   MinWidth="44" IsEnabled="{Binding CanMoveUp}"/>
+              <Button Grid.Column="14" Content="Down" controls:Icon.Key="arrowdown"   Click="Learnset_MoveDown_Click" MinWidth="44" IsEnabled="{Binding CanMoveDown}"/>
+            </Grid>
+          </Border>
+          <Grid DockPanel.Dock="Top" ColumnDefinitions="64,74,180,Auto" Margin="12,4,0,2" TextElement.FontSize="11" TextElement.Foreground="{DynamicResource Editor.Subtle}">
+            <Grid Grid.Column="3" ColumnDefinitions="40,44,28" Margin="6,0,0,0">
+              <TextBlock Text="Power" HorizontalAlignment="Right"/>
+              <TextBlock Grid.Column="1" Text="Acc." HorizontalAlignment="Right"/>
+              <TextBlock Grid.Column="2" Text="PP" HorizontalAlignment="Right"/>
+            </Grid>
+          </Grid>
+          <ListBox ItemsSource="{Binding Entries}" SelectedIndex="{Binding SelectedEntryIndex}" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+            <ListBox.ItemTemplate>
+              <DataTemplate>
+                <Grid ColumnDefinitions="64,74,180,Auto">
+                  <TextBlock Text="{Binding LevelText}" FontFamily="Consolas,monospace" FontSize="12" VerticalAlignment="Center"/>
+                  <controls:MoveBadges Grid.Column="1" Move="{Binding MoveIndex}" Margin="0,0,8,0"/>
+                  <TextBlock Grid.Column="2" Text="{Binding MoveName}" VerticalAlignment="Center"/>
+                  <controls:MoveBadges Grid.Column="3" Move="{Binding MoveIndex}" ShowIcons="False" ShowStats="True"/>
+                </Grid>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+        </DockPanel>
+      </TabItem>
+      <TabItem Header="Evolutions">
+        <DockPanel Margin="8" DataContext="{Binding EvolutionsVM}">
+          <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="12" Margin="0,0,0,6">
+            <Button Content="Import CSV…" controls:Icon.Key="import" Click="Evolutions_Import_Click"/>
+            <Button Content="Export CSV…" controls:Icon.Key="export" Click="Evolutions_Export_Click"/>
+            <TextBlock Text="{Binding ImportNote}" IsVisible="{Binding HasImportNote}" Foreground="{DynamicResource Editor.Warn}" VerticalAlignment="Center" Margin="12,0,0,0"/>
+          </StackPanel>
+          <ScrollViewer HorizontalScrollBarVisibility="Disabled">
+            <StackPanel Spacing="6">
+              <TextBlock Text="{Binding AltFormNotice}" IsVisible="{Binding IsAltForm}"
+                         TextWrapping="Wrap" FontSize="12" Foreground="{DynamicResource Editor.Subtle}"/>
+              <Grid ColumnDefinitions="180,8,80,8,180,16,Auto">
+                <TextBlock Grid.Column="0" Text="Method"         FontWeight="SemiBold" FontSize="12"/>
+                <TextBlock Grid.Column="2" Text="Value"          FontWeight="SemiBold" FontSize="12"/>
+                <TextBlock Grid.Column="4" Text="Target Pokémon" FontWeight="SemiBold" FontSize="12"/>
+                <TextBlock Grid.Column="6" Text="Value type"     FontWeight="SemiBold" FontSize="12"/>
+              </Grid><Separator/>
+              <ItemsControl ItemsSource="{Binding EvoRows}">
+                <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Spacing="6"/></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="vm:EvolutionRowViewModel">
+                    <Grid ColumnDefinitions="180,8,80,8,180,16,Auto">
+                      <ComboBox Grid.Column="0" ItemsSource="{Binding $parent[ItemsControl].((vm:EvolutionsEditorViewModel)DataContext).MethodNames}" SelectedIndex="{Binding MethodIndex}" MinWidth="180"/>
+                      <NumericUpDown Grid.Column="2" Value="{Binding Param}" Minimum="0" Maximum="{Binding ParamMaximum}" FormatString="0" Width="90" IsEnabled="{Binding IsParamEnabled}"/>
+                      <controls:FusionAutoCompleteBox controls:EditorLink.To="Pokemon" Grid.Column="4" ItemsSource="{Binding $parent[ItemsControl].((vm:EvolutionsEditorViewModel)DataContext).PokemonNames}" SelectedIndex="{Binding TargetIndex}" IsEnabled="{Binding IsTargetEnabled}" MinWidth="180"/>
+                      <TextBlock Grid.Column="6" Text="{Binding ParamLabel}" VerticalAlignment="Center" FontSize="12" Foreground="{DynamicResource Editor.Subtle}"/>
+                    </Grid>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+              <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,6,0,0" IsVisible="{Binding CanOfferSlots}">
+                <Button Content="Open in ROM patch toolbox" controls:Icon.Key="OpenLink" Click="OpenEvolutionSlots_Click"
+                        ToolTip.Tip="More evolutions need the Evolution slots patch"/>
+              </StackPanel>
+            </StackPanel>
+          </ScrollViewer>
+        </DockPanel>
+      </TabItem>
+
+      <TabItem Header="Pokédex data">
+        <ScrollViewer Margin="8" DataContext="{Binding PokedexVM}" HorizontalScrollBarVisibility="Disabled">
+          <StackPanel Spacing="10">
+            <TextBlock Text="{Binding Unavailable}" IsVisible="{Binding IsUnavailable}"
+                       TextWrapping="Wrap" FontSize="12" Foreground="{DynamicResource Editor.Subtle}"/>
+            <StackPanel Spacing="10" IsVisible="{Binding IsAvailable}">
+              <ComboBox ItemsSource="{Binding Formes}" SelectedIndex="{Binding FormeIndex}" IsVisible="{Binding ShowForme}" Width="200" HorizontalAlignment="Left"/>
+              <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding ShowListsNote}">
+                <Button Content="Open in Pokédex lists" controls:Icon.Key="OpenLink" Click="PokedexLists_Click" IsVisible="{Binding CanOpenLists}"
+                        ToolTip.Tip="Height, weight and body shape reach the sort lists when you rebuild them"/>
+              </StackPanel>
+              <StackPanel Orientation="Horizontal" Spacing="10">
+              <GroupBox Header="Entry">
+                <Grid ColumnDefinitions="120,180" RowDefinitions="Auto,6,Auto,6,Auto" Margin="0,4,0,0">
+                  <TextBlock Grid.Row="0" Classes="lbl" Text="Height (m)"/>
+                  <NumericUpDown Grid.Row="0" Grid.Column="1" HorizontalAlignment="Stretch" Value="{Binding HeightMetres}" Minimum="0" Maximum="99999.9" Increment="0.1" FormatString="0.0"/>
+                  <TextBlock Grid.Row="2" Classes="lbl" Text="Weight (kg)"/>
+                  <NumericUpDown Grid.Row="2" Grid.Column="1" HorizontalAlignment="Stretch" Value="{Binding WeightKilograms}" Minimum="0" Maximum="99999.9" Increment="0.1" FormatString="0.0"/>
+                  <TextBlock Grid.Row="4" Classes="lbl" Text="Body shape"/>
+                  <ComboBox Grid.Row="4" Grid.Column="1" ItemsSource="{Binding BodyShapes}" SelectedIndex="{Binding BodyShapeIndex}" HorizontalAlignment="Stretch"/>
+                </Grid>
+              </GroupBox>
+              <GroupBox Header="Footprint" IsVisible="{Binding ShowFootprint}">
+                <StackPanel Orientation="Horizontal" Spacing="10" Margin="0,4,0,0">
+                  <Border Width="72" Height="72" Background="#F4F1E8" CornerRadius="2">
+                    <Image Source="{Binding FootprintImage}" Width="64" Height="64" RenderOptions.BitmapInterpolationMode="None"/>
+                  </Border>
+                  <StackPanel Spacing="6" VerticalAlignment="Center">
+                    <Button Content="Import PNG…" Click="ImportFootprint_Click"/>
+                    <Button Content="Export PNG…" Click="ExportFootprint_Click"/>
+                  </StackPanel>
+                </StackPanel>
+              </GroupBox>
+              </StackPanel>
+              <Button Content="Rebuild sort lists" Click="RebuildDexSortLists_Click" IsVisible="{Binding CanRebuildSortLists}" HorizontalAlignment="Left"
+                      ToolTip.Tip="Rebuild the Pokédex weight and height sorts"/>
+              <GroupBox Header="Size comparison">
+                <StackPanel Orientation="Horizontal" Spacing="16">
+                <Grid ColumnDefinitions="120,120,8,120" RowDefinitions="Auto,4,Auto,6,Auto,6,Auto,6,Auto" Margin="0,4,0,0" VerticalAlignment="Top">
+                  <TextBlock Grid.Row="0" Grid.Column="1" Text="Female" FontWeight="SemiBold" FontSize="12"/>
+                  <TextBlock Grid.Row="0" Grid.Column="3" Text="Male" FontWeight="SemiBold" FontSize="12"/>
+                  <TextBlock Grid.Row="2" Classes="lbl" Text="Trainer scale"/>
+                  <NumericUpDown Grid.Row="2" Grid.Column="1" HorizontalAlignment="Stretch" Value="{Binding FemaleTrainerScale}" Minimum="0" Maximum="65535" FormatString="0"/>
+                  <NumericUpDown Grid.Row="2" Grid.Column="3" HorizontalAlignment="Stretch" Value="{Binding MaleTrainerScale}" Minimum="0" Maximum="65535" FormatString="0"/>
+                  <TextBlock Grid.Row="4" Classes="lbl" Text="Pokémon scale"/>
+                  <NumericUpDown Grid.Row="4" Grid.Column="1" HorizontalAlignment="Stretch" Value="{Binding FemalePokemonScale}" Minimum="0" Maximum="65535" FormatString="0"/>
+                  <NumericUpDown Grid.Row="4" Grid.Column="3" HorizontalAlignment="Stretch" Value="{Binding MalePokemonScale}" Minimum="0" Maximum="65535" FormatString="0"/>
+                  <TextBlock Grid.Row="6" Classes="lbl" Text="Trainer Y offset"/>
+                  <NumericUpDown Grid.Row="6" Grid.Column="1" HorizontalAlignment="Stretch" Value="{Binding FemaleTrainerYOffset}" Minimum="-32768" Maximum="32767" FormatString="0"/>
+                  <NumericUpDown Grid.Row="6" Grid.Column="3" HorizontalAlignment="Stretch" Value="{Binding MaleTrainerYOffset}" Minimum="-32768" Maximum="32767" FormatString="0"/>
+                  <TextBlock Grid.Row="8" Classes="lbl" Text="Pokémon Y offset"/>
+                  <NumericUpDown Grid.Row="8" Grid.Column="1" HorizontalAlignment="Stretch" Value="{Binding FemalePokemonYOffset}" Minimum="-32768" Maximum="32767" FormatString="0"/>
+                  <NumericUpDown Grid.Row="8" Grid.Column="3" HorizontalAlignment="Stretch" Value="{Binding MalePokemonYOffset}" Minimum="-32768" Maximum="32767" FormatString="0"/>
+                </Grid>
+                <!-- The game's own size page with the values above, before they are saved. -->
+                <StackPanel Spacing="6" IsVisible="{Binding HasSizePreview}">
+                  <Border BorderBrush="{DynamicResource Editor.Border}" BorderThickness="1" HorizontalAlignment="Left">
+                    <Image Source="{Binding SizePreview}" Width="256" Height="192" RenderOptions.BitmapInterpolationMode="None"/>
+                  </Border>
+                  <StackPanel Orientation="Horizontal" Spacing="10">
+                    <CheckBox Content="Female player" IsChecked="{Binding PreviewFemale}"/>
+                    <Button Content="Pokédex graphics" controls:Icon.Key="OpenLink" Click="OpenSizePage_Click"
+                            ToolTip.Tip="Opens the Pokédex graphics editor on this Pokémon's size page"/>
+                  </StackPanel>
+                </StackPanel>
+                </StackPanel>
+              </GroupBox>
+              <GroupBox Header="Habitat" IsVisible="{Binding ShowAreas}">
+                <GroupBox.Styles>
+                  <!-- Fluent's checkbox is 32px tall; the grid rows are a line of text. -->
+                  <Style Selector="CheckBox">
+                    <Setter Property="MinHeight" Value="0"/>
+                    <Setter Property="Padding" Value="0"/>
+                    <Setter Property="VerticalAlignment" Value="Center"/>
+                  </Style>
+                </GroupBox.Styles>
+                <Grid ColumnDefinitions="Auto,24,Auto" Margin="0,4,0,0">
+                  <StackPanel Grid.Column="0" Spacing="2">
+                    <Grid ColumnDefinitions="170,60,60,60,60,Auto">
+                      <TextBlock Text="Special areas" FontWeight="SemiBold" FontSize="12"/>
+                      <TextBlock Grid.Column="1" Text="Morning" FontSize="12"/>
+                      <TextBlock Grid.Column="2" Text="Day" FontSize="12"/>
+                      <TextBlock Grid.Column="3" Text="Night" FontSize="12"/>
+                      <TextBlock Grid.Column="4" Text="Other" FontSize="12"/>
+                      <TextBlock Grid.Column="5" Text="National Dex" FontSize="12" IsVisible="{Binding ShowNationalDexAreas}"/>
+                    </Grid>
+                    <ItemsControl ItemsSource="{Binding SpecialAreas}">
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:PokedexMetricsEditorViewModel+AreaRow">
+                          <Grid ColumnDefinitions="170,60,60,60,60,Auto" Height="24">
+                            <TextBlock Text="{Binding Name}" VerticalAlignment="Center" FontSize="12"/>
+                            <CheckBox Grid.Column="1" IsChecked="{Binding Morning}"/>
+                            <CheckBox Grid.Column="2" IsChecked="{Binding Day}"/>
+                            <CheckBox Grid.Column="3" IsChecked="{Binding Night}"/>
+                            <CheckBox Grid.Column="4" IsChecked="{Binding Other}"/>
+                            <CheckBox Grid.Column="5" IsChecked="{Binding NationalDex}" IsVisible="{Binding HasNationalDex}"/>
+                          </Grid>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                  </StackPanel>
+                  <StackPanel Grid.Column="2" Spacing="2">
+                    <Grid ColumnDefinitions="170,60,60,60,60,Auto">
+                      <TextBlock Text="Routes and towns" FontWeight="SemiBold" FontSize="12"/>
+                      <TextBlock Grid.Column="1" Text="Morning" FontSize="12"/>
+                      <TextBlock Grid.Column="2" Text="Day" FontSize="12"/>
+                      <TextBlock Grid.Column="3" Text="Night" FontSize="12"/>
+                      <TextBlock Grid.Column="4" Text="Other" FontSize="12"/>
+                      <TextBlock Grid.Column="5" Text="National Dex" FontSize="12" IsVisible="{Binding ShowNationalDexAreas}"/>
+                    </Grid>
+                    <ItemsControl ItemsSource="{Binding RouteAreas}">
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:PokedexMetricsEditorViewModel+AreaRow">
+                          <Grid ColumnDefinitions="170,60,60,60,60,Auto" Height="24">
+                            <TextBlock Text="{Binding Name}" VerticalAlignment="Center" FontSize="12"/>
+                            <CheckBox Grid.Column="1" IsChecked="{Binding Morning}"/>
+                            <CheckBox Grid.Column="2" IsChecked="{Binding Day}"/>
+                            <CheckBox Grid.Column="3" IsChecked="{Binding Night}"/>
+                            <CheckBox Grid.Column="4" IsChecked="{Binding Other}"/>
+                            <CheckBox Grid.Column="5" IsChecked="{Binding NationalDex}" IsVisible="{Binding HasNationalDex}"/>
+                          </Grid>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                  </StackPanel>
+                </Grid>
+              </GroupBox>
+            </StackPanel>
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
+
+      <TabItem Header="Sprites">
+        <views:PokemonSpriteEditorView DataContext="{Binding SpriteVM}"/>
+      </TabItem>
+      <TabItem Header="Pokéwalker" IsVisible="{Binding ShowPokewalkerTab}">
+        <ScrollViewer Margin="8" DataContext="{Binding PokewalkerVM}" HorizontalScrollBarVisibility="Disabled">
+          <StackPanel Spacing="10">
+            <TextBlock Text="{Binding Unavailable}" IsVisible="{Binding IsUnavailable}"
+                       TextWrapping="Wrap" FontSize="12" Foreground="{DynamicResource Editor.Subtle}"/>
+            <ItemsControl ItemsSource="{Binding Pictures}" IsVisible="{Binding IsAvailable}">
+              <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate>
+              </ItemsControl.ItemsPanel>
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:PokewalkerViewModel+Picture">
+                  <GroupBox Header="{Binding Title}" Margin="0,0,10,10">
+                    <StackPanel Spacing="6" Margin="0,4,0,0">
+                      <Border Background="#C8D0B4" CornerRadius="2" Padding="4" HorizontalAlignment="Left">
+                        <Image Source="{Binding Image}" Width="{Binding Width}" Height="{Binding Height}" RenderOptions.BitmapInterpolationMode="None"/>
+                      </Border>
+                      <StackPanel Orientation="Horizontal" Spacing="6">
+                        <Button Content="Import PNG…" Click="ImportPokewalker_Click" Tag="{Binding}"/>
+                        <Button Content="Export PNG…" Click="ExportPokewalker_Click" Tag="{Binding}"/>
+                      </StackPanel>
+                    </StackPanel>
+                  </GroupBox>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
+      <TabItem Header="Battle display">
+        <viewsbattle:BattleDisplayEditorView DataContext="{Binding BattleDisplayVM}"/>
+      </TabItem>
+
+    </TabControl>
+  </DockPanel>
+</Window>

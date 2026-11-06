@@ -1,0 +1,118 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="clr-namespace:DSPRE.Avalonia.Controls"
+        xmlns:vm="clr-namespace:DSPRE.Avalonia.ViewModels.Graphics"
+        x:Class="DSPRE.Avalonia.Views.Graphics.BtxEditorView"
+        x:DataType="vm:BtxEditorViewModel"
+        Title="Overworld editor"
+        Width="1000" Height="560"
+        MinWidth="860" MinHeight="420"
+        WindowStartupLocation="CenterScreen">
+  <Design.DataContext>
+    <vm:BtxEditorViewModel/>
+  </Design.DataContext>
+
+  <DockPanel>
+  <controls:EditorToolbar x:Name="SpriteButtons">
+      <Button Content="Save selected" controls:Icon.Key="saveButton" Click="SaveSelected_Click" IsEnabled="{Binding HasUnsavedChanges}"/>
+      <Button Content="Save all" controls:Icon.Key="saveButton" Click="SaveAll_Click" IsEnabled="{Binding HasUnsavedChanges}"/>
+      <Button Content="Discard" controls:Icon.Key="resetIcon" Click="Discard_Click" IsEnabled="{Binding HasUnsavedChanges}"/>
+      <controls:UndoRedoButtons/>
+      <Button Content="Import…" controls:Icon.Key="import" Click="Import_Click" IsEnabled="{Binding HasSelectedEntry}" Margin="12,2,6,2" ToolTip.Tip="PNG image"/>
+      <Button Content="Export…" controls:Icon.Key="export" Click="Export_Click" IsEnabled="{Binding HasSelectedEntry}" ToolTip.Tip="PNG image"/>
+      <Button Content="Show file" Click="ShowFile_Click" IsEnabled="{Binding HasSelectedEntry}"/>
+      <CheckBox Content="Shiny palette" IsChecked="{Binding IsShiny}"
+                IsEnabled="{Binding HasShinyPalette}" ToolTip.Tip="{Binding ShinyPaletteNote}"/>
+      <StackPanel x:Name="EntryButtons" Orientation="Horizontal" Spacing="6" Margin="12,2,6,2" IsVisible="{Binding ShowEntryButtons}">
+        <Button Content="Add custom entry…" controls:Icon.Key="addIcon" Click="AddEntry_Click" IsEnabled="{Binding CanAddEntry}"
+                ToolTip.Tip="{Binding AddEntryNote}"/>
+        <Button Content="Remove selected" controls:Icon.Key="deleteIcon" Click="DeleteEntry_Click" IsEnabled="{Binding CanDeleteSelected}"
+                IsVisible="{Binding IsExpansionApplied}" ToolTip.Tip="Only entries you added"/>
+      </StackPanel>
+      <TextBlock Text="{Binding ModifiedCount}" Foreground="{DynamicResource Editor.Bad}" FontSize="12"/>
+  </controls:EditorToolbar>
+
+  <Grid ColumnDefinitions="160,8,*,8,260" Margin="8">
+    <!-- Left: entry list -->
+    <DockPanel Grid.Column="0">
+      <TextBlock DockPanel.Dock="Top" Text="Overworlds" FontWeight="SemiBold" Margin="0,0,0,4"/>
+      <ListBox ItemsSource="{Binding OwEntries}"
+               SelectedIndex="{Binding SelectedIndex}"
+               ScrollViewer.VerticalScrollBarVisibility="Auto"/>
+    </DockPanel>
+
+    <!-- Middle: texture preview + save controls -->
+    <DockPanel Grid.Column="2">
+      <TextBlock DockPanel.Dock="Bottom" Margin="0,8,0,0" Text="{Binding StatusText}" FontSize="12"
+                 Foreground="{DynamicResource Editor.Subtle}" TextWrapping="Wrap"/>
+
+      <Border x:Name="SpritePreview" BorderBrush="{DynamicResource Editor.Border}" BorderThickness="1" Background="{DynamicResource Editor.PanelBg}">
+        <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+          <StackPanel Orientation="Horizontal" Spacing="20" Margin="12"
+                      HorizontalAlignment="Center" VerticalAlignment="Top">
+            <Image Source="{Binding CurrentImage}" Stretch="None" VerticalAlignment="Top"/>
+            <ItemsControl ItemsSource="{Binding Facings}" IsVisible="{Binding HasFacings}" VerticalAlignment="Top">
+              <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate><StackPanel Orientation="Horizontal" Spacing="14"/></ItemsPanelTemplate>
+              </ItemsControl.ItemsPanel>
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:FacingPreview">
+                  <StackPanel Spacing="6">
+                    <TextBlock Text="{Binding Label}" HorizontalAlignment="Center" FontSize="12"/>
+                    <Image Source="{Binding Looking}" Width="{Binding Width}" Height="{Binding Height}"
+                           RenderOptions.BitmapInterpolationMode="None" ToolTip.Tip="Standing"/>
+                    <Image Source="{Binding Walking}" Width="{Binding Width}" Height="{Binding Height}" IsVisible="{Binding HasWalking}"
+                           RenderOptions.BitmapInterpolationMode="None" ToolTip.Tip="Walking"/>
+                    <Image Source="{Binding Running}" Width="{Binding Width}" Height="{Binding Height}" IsVisible="{Binding HasRunning}"
+                           RenderOptions.BitmapInterpolationMode="None" ToolTip.Tip="Running"/>
+                  </StackPanel>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </StackPanel>
+        </ScrollViewer>
+      </Border>
+    </DockPanel>
+
+    <!-- Right: overworld properties (render state + expansion-patch add/delete) -->
+    <Grid x:Name="PropertiesPanel" Grid.Column="4" RowDefinitions="Auto,*" IsVisible="{Binding HasRenderTable}">
+      <TextBlock Grid.Row="0" Text="Overworld properties" FontWeight="SemiBold" Margin="0,0,0,4"/>
+
+      <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+        <StackPanel Spacing="10">
+          <Border Padding="8" CornerRadius="4" Background="{DynamicResource Editor.PanelBg}" IsVisible="{Binding IsExpansionApplied}">
+            <TextBlock Text="{Binding ExpansionStatusText}" TextWrapping="Wrap" FontSize="12"/>
+          </Border>
+
+          <StackPanel Spacing="4" IsVisible="{Binding HasRenderState}">
+            <TextBlock Text="Display" FontWeight="SemiBold" ToolTip.Tip="Render state"/>
+            <TextBlock Text="Draw type" FontSize="12" Foreground="{DynamicResource Editor.Subtle}"/>
+            <ComboBox ItemsSource="{Binding DrawTypeOptions}" SelectedIndex="{Binding DrawTypeIndex}" HorizontalAlignment="Stretch"
+                      ToolTip.Tip="Not drawn, a flat sprite or a 3D model."/>
+            <TextBlock Text="Shadow" FontSize="12" Foreground="{DynamicResource Editor.Subtle}"/>
+            <ComboBox ItemsSource="{Binding ShadowTypeOptions}" SelectedIndex="{Binding ShadowTypeIndex}" HorizontalAlignment="Stretch"/>
+            <TextBlock Text="Footmark" FontSize="12" Foreground="{DynamicResource Editor.Subtle}"/>
+            <ComboBox ItemsSource="{Binding FootmarkTypeOptions}" SelectedIndex="{Binding FootmarkTypeIndex}" HorizontalAlignment="Stretch"
+                      ToolTip.Tip="Footprints left when walking or cycling on sand."/>
+            <TextBlock Text="Reflection" FontSize="12" Foreground="{DynamicResource Editor.Subtle}"/>
+            <ComboBox ItemsSource="{Binding ReflectTypeOptions}" SelectedIndex="{Binding ReflectTypeIndex}" HorizontalAlignment="Stretch"
+                      ToolTip.Tip="Whether this overworld shows a water reflection."/>
+          </StackPanel>
+          <TextBlock Text="No display settings" FontSize="12" FontStyle="Italic"
+                     Foreground="{DynamicResource Editor.Subtle}" TextWrapping="Wrap"
+                     IsVisible="{Binding !HasRenderState}"/>
+
+          <StackPanel Spacing="4" IsVisible="{Binding IsExpansionApplied}">
+            <TextBlock Text="Copied settings (read-only)" FontWeight="SemiBold"
+                       ToolTip.Tip="What this entry copied from another one."/>
+            <TextBlock Text="{Binding RendererInfoText, StringFormat='Renderer row: {0}'}" FontSize="11" FontFamily="Consolas,Cascadia Mono,monospace" TextWrapping="Wrap"/>
+            <TextBlock Text="{Binding AnimationInfoText, StringFormat='Animation row: {0}'}" FontSize="11" FontFamily="Consolas,Cascadia Mono,monospace" TextWrapping="Wrap"/>
+          </StackPanel>
+
+        </StackPanel>
+      </ScrollViewer>
+    </Grid>
+
+  </Grid>
+  </DockPanel>
+</Window>

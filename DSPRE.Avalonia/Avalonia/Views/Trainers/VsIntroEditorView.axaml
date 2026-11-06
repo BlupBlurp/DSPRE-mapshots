@@ -1,0 +1,553 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:DSPRE.Avalonia.ViewModels.Trainers"
+             xmlns:controls="clr-namespace:DSPRE.Avalonia.Controls"
+             x:Class="DSPRE.Avalonia.Views.Trainers.VsIntroEditorView"
+             x:DataType="vm:VsIntroEditorViewModel">
+  <Design.DataContext>
+    <vm:VsIntroEditorViewModel/>
+  </Design.DataContext>
+
+  <UserControl.Styles>
+    <Style Selector="ListBox.grouped ListBoxItem">
+      <Setter Property="IsHitTestVisible" Value="{ReflectionBinding IsItem, Mode=OneWay}"/>
+      <Setter Property="Focusable" Value="{ReflectionBinding IsItem, Mode=OneWay}"/>
+    </Style>
+    <Style Selector="TextBlock.section">
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="Margin" Value="0,10,0,2"/>
+    </Style>
+    <Style Selector="Button.link">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="Padding" Value="0,1"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Foreground" Value="{DynamicResource SystemControlHighlightAccentBrush}"/>
+    </Style>
+    <Style Selector="TextBlock.subtle">
+      <Setter Property="FontSize" Value="11"/>
+      <Setter Property="Foreground" Value="{DynamicResource Editor.Subtle}"/>
+      <Setter Property="TextWrapping" Value="Wrap"/>
+    </Style>
+  </UserControl.Styles>
+
+  <DockPanel>
+    <Border DockPanel.Dock="Bottom" Background="{DynamicResource Editor.StatusBg}" BorderBrush="{DynamicResource Editor.Border}"
+            BorderThickness="0,1,0,0" Padding="8,3">
+      <TextBlock Text="{Binding StatusText}" FontSize="11" Foreground="{DynamicResource Editor.Subtle}" VerticalAlignment="Center" TextWrapping="Wrap"/>
+    </Border>
+
+    <controls:EditorToolbar>
+        <Button Content="Save" controls:Icon.Key="saveButton" Click="Save_Click" IsEnabled="{Binding HasUnsavedChanges}"/>
+        <Button Content="Discard" controls:Icon.Key="resetIcon" Click="Discard_Click" IsEnabled="{Binding HasUnsavedChanges}"/>
+        <controls:UndoRedoButtons/>
+    </controls:EditorToolbar>
+
+    <TabControl x:Name="IntroTabs" SelectedIndex="{Binding SelectedTab}" Margin="4">
+
+      <!-- Mugshots -->
+      <TabItem Header="Mugshots" IsVisible="{Binding ShowStockTabs}">
+        <Grid ColumnDefinitions="220,*,540">
+          <ListBox x:Name="MugshotList" Classes="grouped" Grid.Column="0" Margin="4" ItemsSource="{Binding MugshotRows}"
+                   SelectedItem="{Binding SelectedMugshot}" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+            <ListBox.ItemTemplate>
+              <DataTemplate x:DataType="vm:IntroRow">
+                <StackPanel>
+                  <TextBlock Text="{Binding Title}" FontWeight="SemiBold" IsVisible="{Binding IsHeader}" Margin="0,6,0,0"
+                             Foreground="{DynamicResource Editor.Subtle}"/>
+                  <TextBlock Text="{Binding Title}" IsVisible="{Binding IsItem}"/>
+                  <TextBlock Text="{Binding Detail}" IsVisible="{Binding IsItem}" FontSize="11" TextWrapping="Wrap"
+                             Foreground="{DynamicResource Editor.Subtle}"/>
+                </StackPanel>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+
+          <ScrollViewer Grid.Column="1">
+            <StackPanel x:Name="MugshotDetails" Margin="12,8" Spacing="6" IsVisible="{Binding HasMugshot}">
+              <TextBlock Text="{Binding MugshotTitle}" FontSize="16" FontWeight="SemiBold"/>
+              <TextBlock Text="{Binding MugshotUsedBy}" Classes="subtle"/>
+              <Button Content="Classes and music" Click="ClassesAndMusic_Click" HorizontalAlignment="Left"/>
+
+              <TextBlock Text="Banner name" Classes="section" IsVisible="{Binding ShowTrainer}"/>
+              <controls:FusionAutoCompleteBox ItemsSource="{Binding TrainerChoices}" SelectedIndex="{Binding TrainerIndex}" HorizontalAlignment="Stretch"
+                        IsVisible="{Binding ShowTrainer}" ToolTip.Tip="The trainer whose name the banner shows"/>
+              <CheckBox Content="Show the rival's name" IsChecked="{Binding RivalName}" IsVisible="{Binding ShowRivalName}"/>
+
+              <TextBlock Text="{Binding ClassLabel}" Classes="section" IsVisible="{Binding ShowClass}"/>
+              <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6" IsVisible="{Binding ShowClass}">
+                <controls:FusionAutoCompleteBox ItemsSource="{Binding ClassChoices}" SelectedIndex="{Binding ClassIndex}" HorizontalAlignment="Stretch"
+                          ToolTip.Tip="{Binding ClassTip}"/>
+                <Button Grid.Column="1" Content="Edit colours" controls:Icon.Key="pencil" Click="ClassColours_Click" IsVisible="{Binding CanEditClassColours}"
+                        ToolTip.Tip="The class's battle sprite uses the same colours, so it changes too"/>
+              </Grid>
+
+              <TextBlock Text="Face" Classes="section" IsVisible="{Binding ShowFace}"/>
+              <ComboBox ItemsSource="{Binding FaceSetChoices}" SelectedIndex="{Binding FaceSetIndex}" HorizontalAlignment="Stretch"
+                        IsVisible="{Binding ShowFace}" PlaceholderText="{Binding FaceFiles}"/>
+              <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding ShowFace}">
+                <Button Content="Paint" controls:Icon.Key="brush" Click="PaintFace_Click"/>
+                <Button Content="Animation" Click="AnimateFace_Click"/>
+                <Button Content="New copy" Click="NewFaceCopy_Click" IsVisible="{Binding CanCopyArt}"
+                        ToolTip.Tip="Copy this art so painting it changes only this intro"/>
+              </StackPanel>
+              <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding ShowEndX}">
+                <TextBlock Text="Stops at X" VerticalAlignment="Center"/>
+                <NumericUpDown Value="{Binding EndX}" Minimum="0" Maximum="255" Increment="1" FormatString="0" Width="110"/>
+              </StackPanel>
+              <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding ShowFaceColumn}">
+                <TextBlock Text="Cut from column" VerticalAlignment="Center"/>
+                <NumericUpDown Value="{Binding FaceColumn}" Minimum="0" Maximum="8" Increment="1" FormatString="0" Width="110"
+                               ToolTip.Tip="Where the face starts in the battle sprite, in 8-pixel columns"/>
+              </StackPanel>
+
+              <TextBlock Text="Banner" Classes="section" IsVisible="{Binding ShowBanner}"/>
+              <ComboBox ItemsSource="{Binding BannerSetChoices}" SelectedIndex="{Binding BannerSetIndex}" HorizontalAlignment="Stretch"
+                        IsVisible="{Binding ShowBanner}" PlaceholderText="{Binding BannerFiles}"/>
+              <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding ShowBanner}">
+                <Button Content="Paint" controls:Icon.Key="brush" Click="PaintBanner_Click"/>
+                <Button Content="Open in All graphics" Click="BannerGraphics_Click"/>
+                <Button Content="New copy" Click="NewBannerCopy_Click" IsVisible="{Binding CanCopyArt}"
+                        ToolTip.Tip="Copy this art so painting it changes only this intro"/>
+              </StackPanel>
+
+              <TextBlock Text="{Binding FramePaletteLabel}" Classes="section" IsVisible="{Binding ShowFramePalette}"/>
+              <ComboBox ItemsSource="{Binding FramePaletteChoices}" SelectedIndex="{Binding FramePaletteIndex}" HorizontalAlignment="Stretch"
+                        IsVisible="{Binding ShowFramePalette}"/>
+              <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding ShowClash}">
+                <TextBlock Text="Clash shake" VerticalAlignment="Center"/>
+                <NumericUpDown Value="{Binding ClashFrames}" Minimum="0" Maximum="255" Increment="1" FormatString="0" Width="110"
+                               ToolTip.Tip="Frames"/>
+              </StackPanel>
+              <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding ShowCamera}">
+                <TextBlock Text="Camera turn" VerticalAlignment="Center"/>
+                <NumericUpDown Value="{Binding CameraTurn}" Minimum="0" Maximum="65535" Increment="100" FormatString="0" Width="120"/>
+                <TextBlock Text="over" VerticalAlignment="Center"/>
+                <NumericUpDown Value="{Binding PanFrames}" Minimum="0" Maximum="255" Increment="1" FormatString="0" Width="100"
+                               ToolTip.Tip="Frames"/>
+              </StackPanel>
+
+              <TextBlock Text="Particles" Classes="section" IsVisible="{Binding ShowParticles}"/>
+              <ItemsControl ItemsSource="{Binding Particles}" IsVisible="{Binding ShowParticles}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="vm:ParticleArt">
+                    <Grid ColumnDefinitions="120,*,Auto" Margin="0,2">
+                      <TextBlock Text="{Binding Label}" VerticalAlignment="Center"/>
+                      <TextBlock Grid.Column="1" Text="{Binding Value}" VerticalAlignment="Center" Foreground="{DynamicResource Editor.Subtle}"/>
+                      <Button Grid.Column="2" Content="Open" controls:Icon.Key="OpenLink" Tag="{Binding}" Click="Particle_Click"/>
+                    </Grid>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+
+              <TextBlock Text="Fixed by the game" Classes="section"/>
+              <ItemsControl x:Name="FixedList" ItemsSource="{Binding Fixed}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="vm:FixedArt">
+                    <Grid ColumnDefinitions="120,*,Auto" Margin="0,2">
+                      <TextBlock Text="{Binding Label}" VerticalAlignment="Center"/>
+                      <TextBlock Grid.Column="1" Text="{Binding Value}" VerticalAlignment="Center" TextWrapping="Wrap"
+                                 Foreground="{DynamicResource Editor.Subtle}"/>
+                      <Button Grid.Column="2" Content="Open" controls:Icon.Key="OpenLink" Tag="{Binding}" Click="Fixed_Click" IsVisible="{Binding CanOpen}"/>
+                    </Grid>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </StackPanel>
+          </ScrollViewer>
+
+          <StackPanel x:Name="MugshotPreview" Grid.Column="2" Margin="8" Spacing="6" IsVisible="{Binding HasPreview}">
+            <Border Background="Black" Width="512" Height="384" HorizontalAlignment="Left">
+              <Image Source="{Binding PreviewImage}" Width="512" Height="384" RenderOptions.BitmapInterpolationMode="None"/>
+            </Border>
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <Button Content="{Binding AnimateLabel}" Click="Animate_Click"/>
+              <CheckBox Content="Girl player" IsChecked="{Binding PlayerGirl}" IsVisible="{Binding ShowPlayerChoice}"/>
+            </StackPanel>
+          </StackPanel>
+        </Grid>
+      </TabItem>
+
+      <!-- Intros and music -->
+      <TabItem Header="Intros and music" IsVisible="{Binding ShowStockTabs}">
+        <Grid ColumnDefinitions="260,*">
+          <ListBox x:Name="IntroList" Classes="grouped" Grid.Column="0" Margin="4" ItemsSource="{Binding IntroRows}"
+                   SelectedItem="{Binding SelectedIntro}" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+            <ListBox.ItemTemplate>
+              <DataTemplate x:DataType="vm:IntroRow">
+                <StackPanel>
+                  <TextBlock Text="{Binding Title}" FontWeight="SemiBold" IsVisible="{Binding IsHeader}" Margin="0,6,0,0"
+                             Foreground="{DynamicResource Editor.Subtle}"/>
+                  <TextBlock Text="{Binding Title}" IsVisible="{Binding IsItem}"/>
+                  <TextBlock Text="{Binding Detail}" IsVisible="{Binding IsItem}" FontSize="11" Foreground="{DynamicResource Editor.Subtle}"/>
+                </StackPanel>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+
+          <ScrollViewer Grid.Column="1">
+            <StackPanel x:Name="IntroDetails" Margin="12,8" Spacing="6" IsVisible="{Binding HasIntro}" HorizontalAlignment="Left">
+              <TextBlock Text="{Binding IntroTitle}" FontSize="16" FontWeight="SemiBold"/>
+              <TextBlock Text="{Binding IntroKindText}" Classes="subtle"/>
+              <Button Content="Show mugshot" Click="ShowMugshot_Click" IsVisible="{Binding HasIntroMugshot}" HorizontalAlignment="Left"/>
+              <TextBlock Text="Music" Classes="section"/>
+              <ComboBox ItemsSource="{Binding SequenceChoices}" SelectedIndex="{Binding SequenceIndex}" Width="320" HorizontalAlignment="Left"/>
+              <TextBlock Text="Trainer classes" Classes="section"/>
+              <ItemsControl x:Name="IntroClassList" ItemsSource="{Binding IntroClasses}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="vm:IntroRow">
+                    <Button Classes="link" Content="{Binding Title}" Tag="{Binding}" Click="IntroClass_Click"
+                            ToolTip.Tip="Open this class on the Classes tab"/>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+              <TextBlock Text="{Binding IntroClassesNote}" Classes="subtle"/>
+            </StackPanel>
+          </ScrollViewer>
+        </Grid>
+      </TabItem>
+
+      <!-- Classes: each class's intro, set one at a time or for several ticked classes -->
+      <TabItem Header="Classes" IsVisible="{Binding ShowStockTabs}">
+        <Grid ColumnDefinitions="300,*,540">
+          <DockPanel Grid.Column="0" Margin="4">
+            <TextBox DockPanel.Dock="Top" Text="{Binding ClassSearch}" PlaceholderText="Search by class or intro" Margin="0,0,0,4"/>
+            <Border DockPanel.Dock="Bottom" IsVisible="{Binding HasTicks}" Margin="0,6,0,0" Padding="6"
+                    BorderBrush="{DynamicResource Editor.Border}" BorderThickness="1" CornerRadius="4">
+              <StackPanel Spacing="6">
+                <TextBlock Text="{Binding BulkLabel}" FontWeight="SemiBold"/>
+                <ComboBox x:Name="BulkIntroBox" ItemsSource="{Binding BulkChoices}" SelectedIndex="{Binding BulkIndex}" HorizontalAlignment="Stretch"
+                          PlaceholderText="Pick an intro">
+                  <ComboBox.ItemTemplate>
+                    <DataTemplate x:DataType="vm:IntroChoice">
+                      <StackPanel ToolTip.Tip="{Binding Name}">
+                        <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis"/>
+                        <TextBlock Text="{Binding Music}" FontSize="11" TextTrimming="CharacterEllipsis" Foreground="{DynamicResource Editor.Subtle}"/>
+                      </StackPanel>
+                    </DataTemplate>
+                  </ComboBox.ItemTemplate>
+                </ComboBox>
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                  <Button x:Name="ApplyBulkButton" Content="Apply" Click="ApplyBulk_Click" IsEnabled="{Binding CanApplyBulk}"/>
+                  <Button Content="Clear ticks" Click="ClearTicks_Click"/>
+                </StackPanel>
+              </StackPanel>
+            </Border>
+            <ListBox x:Name="ClassList" Classes="grouped" ItemsSource="{Binding ClassRows}" SelectedItem="{Binding SelectedClass}"
+                     ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+              <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="vm:ClassRow">
+                  <Panel>
+                    <TextBlock Text="{Binding Title}" FontWeight="SemiBold" IsVisible="{Binding IsHeader}" Margin="0,6,0,0"
+                               Foreground="{DynamicResource Editor.Subtle}"/>
+                    <Grid ColumnDefinitions="Auto,*" IsVisible="{Binding IsItem}">
+                      <CheckBox IsChecked="{Binding Tick}" VerticalAlignment="Center" MinWidth="0" Margin="0,0,6,0"
+                                ToolTip.Tip="Tick classes to set their intro together"/>
+                      <StackPanel Grid.Column="1">
+                        <TextBlock Text="{Binding Title}" TextTrimming="CharacterEllipsis"/>
+                        <TextBlock Text="{Binding Detail}" FontSize="11" TextTrimming="CharacterEllipsis" Foreground="{DynamicResource Editor.Subtle}"/>
+                      </StackPanel>
+                    </Grid>
+                  </Panel>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+          </DockPanel>
+
+          <ScrollViewer Grid.Column="1">
+            <StackPanel x:Name="ClassDetails" Margin="12,8" Spacing="6" IsVisible="{Binding HasClass}">
+              <TextBlock Text="{Binding ClassTitle}" FontSize="16" FontWeight="SemiBold"/>
+              <TextBlock Text="Intro" Classes="section"/>
+              <ComboBox x:Name="ClassIntroBox" ItemsSource="{Binding ClassIntroChoices}" SelectedIndex="{Binding ClassIntroIndex}" Width="320"
+                        HorizontalAlignment="Left" IsEnabled="{Binding ClassEditable}">
+                <ComboBox.ItemTemplate>
+                  <DataTemplate x:DataType="vm:IntroChoice">
+                    <StackPanel ToolTip.Tip="{Binding Name}">
+                      <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis"/>
+                      <TextBlock Text="{Binding Music}" FontSize="11" TextTrimming="CharacterEllipsis" Foreground="{DynamicResource Editor.Subtle}"/>
+                    </StackPanel>
+                  </DataTemplate>
+                </ComboBox.ItemTemplate>
+              </ComboBox>
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <TextBlock Text="{Binding ClassNote}" Classes="subtle" VerticalAlignment="Center"/>
+                <Button Content="Open in ROM patch toolbox" controls:Icon.Key="OpenLink" Click="MakeClassRoom_Click" IsVisible="{Binding CanMakeClassRoom}"
+                        ToolTip.Tip="The &quot;VS intro class table expansion&quot; patch gives room for up to 255 classes"/>
+              </StackPanel>
+              <TextBlock Text="Music" Classes="section"/>
+              <ComboBox x:Name="ClassMusicBox" ItemsSource="{Binding SequenceChoices}" SelectedIndex="{Binding ClassMusicIndex}" Width="320"
+                        HorizontalAlignment="Left" IsEnabled="{Binding ClassMusicEditable}"/>
+              <TextBlock Text="{Binding ClassMusicNote}" Classes="subtle" MaxWidth="320" HorizontalAlignment="Left"/>
+              <Button Content="Show mugshot" Click="ShowClassMugshot_Click" IsVisible="{Binding HasClassMugshot}" HorizontalAlignment="Left"
+                      Margin="0,8,0,0"/>
+            </StackPanel>
+          </ScrollViewer>
+
+          <StackPanel x:Name="ClassPreview" Grid.Column="2" Margin="8" Spacing="6">
+            <Border Background="Black" Width="512" Height="384" HorizontalAlignment="Left" IsVisible="{Binding HasClassPreview}">
+              <Image Source="{Binding ClassPreviewImage}" Width="512" Height="384" RenderOptions.BitmapInterpolationMode="None"/>
+            </Border>
+            <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding HasClassPreview}">
+              <Button Content="{Binding ClassAnimateLabel}" Click="AnimateClass_Click"/>
+              <ComboBox ItemsSource="{Binding TerrainChoices}" SelectedIndex="{Binding ClassTerrainIndex}" IsVisible="{Binding ShowClassTerrain}" Width="160"
+                        ToolTip.Tip="The game picks the Poké Balls by the terrain and the trainer's level"/>
+              <CheckBox Content="Girl player" IsChecked="{Binding PlayerGirl}" IsVisible="{Binding ShowClassPlayerChoice}"/>
+            </StackPanel>
+            <TextBlock Text="{Binding ClassPreviewNote}" Classes="subtle" MaxWidth="512" HorizontalAlignment="Left"/>
+          </StackPanel>
+        </Grid>
+      </TabItem>
+
+      <!-- Class intros (trainer class metadata patch): each class's own intro record -->
+      <TabItem Header="Class intros" IsVisible="{Binding IsClassRecords}">
+        <Grid>
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="220"/><ColumnDefinition Width="*" MinWidth="380"/><ColumnDefinition Width="540"/>
+          </Grid.ColumnDefinitions>
+          <ListBox Grid.Column="0" Margin="4" ItemsSource="{Binding ClassRecordNames}" SelectedIndex="{Binding SelectedRecordIndex}"
+                   ScrollViewer.HorizontalScrollBarVisibility="Disabled"/>
+          <ScrollViewer Grid.Column="1" Margin="4">
+            <StackPanel Spacing="6" IsVisible="{Binding HasRecord}" Margin="4">
+              <TextBlock Text="VS style"/>
+              <ComboBox ItemsSource="{Binding StyleChoices}" SelectedIndex="{Binding StyleIndex}" HorizontalAlignment="Stretch"/>
+              <CheckBox Content="Use the rival's saved name" IsChecked="{Binding SavedRivalName}" IsVisible="{Binding ShowSavedRival}"/>
+              <StackPanel Spacing="2" IsVisible="{Binding ShowStaticName}">
+                <TextBlock Text="Name shown"/>
+                <controls:FusionAutoCompleteBox ItemsSource="{Binding StaticNameChoices}" SelectedIndex="{Binding StaticNameIndex}" HorizontalAlignment="Stretch"/>
+              </StackPanel>
+              <ItemsControl ItemsSource="{Binding ArtSlots}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="vm:IntroArtSlot">
+                    <StackPanel Spacing="2" Margin="0,4,0,0" IsVisible="{Binding Visible}">
+                      <TextBlock Text="{Binding Label}"/>
+                      <ComboBox ItemsSource="{Binding Choices}" SelectedIndex="{Binding Index}" HorizontalAlignment="Stretch"/>
+                      <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,2,0,0">
+                        <Button Content="Paint" controls:Icon.Key="pencil" Tag="{Binding}" Click="PaintSlot_Click"/>
+                        <Button Content="Animation" Tag="{Binding}" Click="AnimateSlot_Click" IsVisible="{Binding CanAnimate}"/>
+                        <Button Content="New copy" Tag="{Binding}" Click="NewSlotCopy_Click"
+                                ToolTip.Tip="Copy this art so painting it changes only this intro"/>
+                      </StackPanel>
+                      <ItemsControl ItemsSource="{Binding Parts}">
+                        <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                          <DataTemplate x:DataType="vm:IntroArtFile">
+                            <StackPanel Margin="0,2,12,0" Spacing="1">
+                              <TextBlock Classes="subtle" Text="{Binding Label}"/>
+                              <StackPanel Orientation="Horizontal" Spacing="2">
+                                <!-- The theme draws the box's own border inside its template, so the warning goes on one around it. -->
+                                <Border Classes="slot" BorderThickness="2" CornerRadius="4"
+                                        Classes.mismatch="{Binding HasMismatch}" ToolTip.Tip="{Binding Mismatch}">
+                                  <Border.Styles>
+                                    <!-- Both brushes come from styles: a local brush would outrank the warning one. -->
+                                    <Style Selector="Border.slot">
+                                      <Setter Property="BorderBrush" Value="Transparent"/>
+                                    </Style>
+                                    <Style Selector="Border.slot.mismatch">
+                                      <Setter Property="BorderBrush" Value="{DynamicResource Editor.Warn}"/>
+                                    </Style>
+                                  </Border.Styles>
+                                  <NumericUpDown Value="{Binding Value}" Minimum="0" Maximum="65535" Increment="1" FormatString="0" Width="96"/>
+                                </Border>
+                                <Button controls:Icon.Key="OpenLink" Tag="{Binding}" Click="ShowPart_Click" ToolTip.Tip="Show in All graphics"
+                                        IsVisible="{Binding CanShow}"/>
+                              </StackPanel>
+                            </StackPanel>
+                          </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                      </ItemsControl>
+                    </StackPanel>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+              <StackPanel Spacing="2" IsVisible="{Binding ShowMotion}">
+                <TextBlock Text="Portrait stops at X"/>
+                <NumericUpDown Value="{Binding Motion}" Minimum="0" Maximum="255" Increment="1" FormatString="0" Width="110" HorizontalAlignment="Left"
+                               ToolTip.Tip="Where the portrait stops sliding, in pixels from the left"/>
+              </StackPanel>
+              <StackPanel Spacing="2" IsVisible="{Binding ShowTiming}">
+                <TextBlock Text="Clash shake"/>
+                <NumericUpDown Value="{Binding Timing}" Minimum="0" Maximum="255" Increment="1" FormatString="0" Width="110" HorizontalAlignment="Left"
+                               ToolTip.Tip="Frames"/>
+              </StackPanel>
+
+              <StackPanel Spacing="4" Margin="0,10,0,0" IsVisible="{Binding ShowTimingSection}">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                  <TextBlock Text="Timings" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                  <controls:HelpTip Text="How long each part of this class's intro takes, in frames. 0 keeps the game's timing."/>
+                </StackPanel>
+                <TextBlock Text="{Binding TimingNote}" IsVisible="{Binding !HasTimings}" TextWrapping="Wrap" Foreground="{DynamicResource Editor.Subtle}"/>
+                <Button Content="Open in ROM patch toolbox" controls:Icon.Key="OpenLink" Click="InstallTimings_Click" IsVisible="{Binding CanInstallTimings}" HorizontalAlignment="Left"/>
+                <ItemsControl ItemsSource="{Binding TimingRows}" IsVisible="{Binding ShowTimingRows}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:TimingRow">
+                      <Grid ColumnDefinitions="110,110,Auto" Margin="0,2" IsVisible="{Binding Visible}">
+                        <TextBlock Text="{Binding Label}" VerticalAlignment="Center" ToolTip.Tip="{Binding Tip}"/>
+                        <NumericUpDown Grid.Column="1" Value="{Binding Value}" Minimum="0" Maximum="255" Increment="1" FormatString="0" Width="110" ToolTip.Tip="{Binding Tip}"/>
+                        <TextBlock Grid.Column="2" Text="{Binding GameValue}" VerticalAlignment="Center" Margin="8,0,0,0" Foreground="{DynamicResource Editor.Subtle}"/>
+                      </Grid>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </StackPanel>
+            </StackPanel>
+          </ScrollViewer>
+          <StackPanel Grid.Column="2" Margin="8" Spacing="6" IsVisible="{Binding HasPreview}">
+            <Border Background="Black" Width="512" Height="384" HorizontalAlignment="Left">
+              <Image Source="{Binding PreviewImage}" Width="512" Height="384" RenderOptions.BitmapInterpolationMode="None"/>
+            </Border>
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <Button Content="{Binding AnimateLabel}" Click="Animate_Click" IsVisible="{Binding CanAnimate}"/>
+              <ComboBox ItemsSource="{Binding TerrainChoices}" SelectedIndex="{Binding TerrainIndex}" IsVisible="{Binding ShowTerrain}" Width="160"/>
+              <CheckBox Content="Girl player" IsChecked="{Binding PlayerGirl}" IsVisible="{Binding ShowPlayerChoice}"/>
+            </StackPanel>
+          </StackPanel>
+        </Grid>
+      </TabItem>
+
+      <!-- Class intros (class intros patch): each class's row -->
+      <TabItem Header="Class intros" AutomationProperties.Name="Trainer class intros" IsVisible="{Binding IsClassIntroPatch}">
+        <Grid>
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="220"/><ColumnDefinition Width="*" MinWidth="380"/><ColumnDefinition Width="540"/>
+          </Grid.ColumnDefinitions>
+          <ListBox x:Name="CiClassList" Grid.Column="0" Margin="4" ItemsSource="{Binding CiClassNames}" SelectedIndex="{Binding CiSelectedIndex}"
+                   ScrollViewer.HorizontalScrollBarVisibility="Disabled"/>
+          <ScrollViewer Grid.Column="1" Margin="4">
+            <StackPanel x:Name="CiClassDetails" Spacing="6" IsVisible="{Binding CiHasRow}" Margin="4">
+              <TextBlock Text="VS style"/>
+              <ComboBox x:Name="CiStyleBox" ItemsSource="{Binding CiStyleChoices}" SelectedIndex="{Binding CiStyleIndex}" Width="320" HorizontalAlignment="Left"/>
+              <TextBlock Text="Music" Classes="section"/>
+              <ComboBox x:Name="CiMusicBox" ItemsSource="{Binding SequenceChoices}" SelectedIndex="{Binding CiMusicIndex}" Width="320" HorizontalAlignment="Left"/>
+
+              <StackPanel Spacing="6" IsVisible="{Binding CiPtRecord}">
+                <TextBlock Text="Name shown" Classes="section"/>
+                <controls:FusionAutoCompleteBox ItemsSource="{Binding TrainerChoices}" SelectedIndex="{Binding CiNameIndex}" HorizontalAlignment="Stretch"/>
+                <TextBlock Text="Portrait" Classes="section"/>
+                <ComboBox x:Name="CiFaceBox" ItemsSource="{Binding FaceSetChoices}" SelectedIndex="{Binding CiFaceIndex}" HorizontalAlignment="Stretch"/>
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                  <Button Content="Paint" controls:Icon.Key="brush" Click="CiPaintPortrait_Click"/>
+                  <Button Content="New copy" Click="CiNewPortraitCopy_Click" IsVisible="{Binding CanCopyArt}"
+                          ToolTip.Tip="Copy this art so painting it changes only this intro"/>
+                </StackPanel>
+                <StackPanel Spacing="6" IsVisible="{Binding CiIsGym}">
+                  <TextBlock Text="Banner" Classes="section"/>
+                  <ComboBox x:Name="CiBannerBox" ItemsSource="{Binding BannerSetChoices}" SelectedIndex="{Binding CiBannerIndex}" HorizontalAlignment="Stretch"/>
+                  <StackPanel Orientation="Horizontal" Spacing="6">
+                    <Button Content="Paint" controls:Icon.Key="brush" Click="CiPaintBanner_Click"/>
+                    <Button Content="New copy" Click="CiNewBannerCopy_Click" IsVisible="{Binding CanCopyArt}"
+                            ToolTip.Tip="Copy this art so painting it changes only this intro"/>
+                  </StackPanel>
+                  <TextBlock Text="Portrait stops at X" Classes="section"/>
+                  <NumericUpDown Value="{Binding CiEndX}" Minimum="0" Maximum="255" Increment="1" FormatString="0" Width="110" HorizontalAlignment="Left"
+                                 ToolTip.Tip="Where the portrait stops sliding, in pixels from the left"/>
+                </StackPanel>
+                <StackPanel Spacing="6" IsVisible="{Binding CiIsLeague}">
+                  <TextBlock Text="Frame colours" Classes="section"/>
+                  <ComboBox x:Name="CiFrameBox" ItemsSource="{Binding FramePaletteChoices}" SelectedIndex="{Binding CiFrameIndex}" HorizontalAlignment="Stretch"/>
+                  <TextBlock Text="Clash shake" Classes="section"/>
+                  <NumericUpDown Value="{Binding CiClash}" Minimum="0" Maximum="255" Increment="1" FormatString="0" Width="110" HorizontalAlignment="Left"
+                                 ToolTip.Tip="Frames"/>
+                </StackPanel>
+              </StackPanel>
+              <StackPanel Spacing="6" IsVisible="{Binding CiHasRecord}">
+                <TextBlock Text="{Binding CiClassLabel}" Classes="section"/>
+                <controls:FusionAutoCompleteBox ItemsSource="{Binding ClassChoices}" SelectedIndex="{Binding CiColoursIndex}" HorizontalAlignment="Stretch"
+                          ToolTip.Tip="{Binding CiClassTip}"/>
+              </StackPanel>
+              <StackPanel Spacing="6" IsVisible="{Binding CiDpGym}">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                  <TextBlock Text="Cut from column" VerticalAlignment="Center"/>
+                  <NumericUpDown Value="{Binding CiFaceColumn}" Minimum="0" Maximum="8" Increment="1" FormatString="0" Width="110"
+                                 ToolTip.Tip="Where the face starts in the battle sprite, in 8-pixel columns"/>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                  <TextBlock Text="Stops at X" VerticalAlignment="Center"/>
+                  <NumericUpDown Value="{Binding CiEndX}" Minimum="0" Maximum="255" Increment="1" FormatString="0" Width="110"
+                                 ToolTip.Tip="Where the face stops sliding, in pixels from the left"/>
+                </StackPanel>
+              </StackPanel>
+              <StackPanel Spacing="6" IsVisible="{Binding CiDpLeague}">
+                <TextBlock Text="Banner colours" Classes="section"/>
+                <ComboBox x:Name="CiDpFrameBox" ItemsSource="{Binding FramePaletteChoices}" SelectedIndex="{Binding CiFrameIndex}" HorizontalAlignment="Stretch"/>
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                  <TextBlock Text="Camera turn" VerticalAlignment="Center"/>
+                  <NumericUpDown Value="{Binding CiCameraTurn}" Minimum="0" Maximum="65535" Increment="100" FormatString="0" Width="120"/>
+                  <TextBlock Text="over" VerticalAlignment="Center"/>
+                  <NumericUpDown Value="{Binding CiPanFrames}" Minimum="0" Maximum="255" Increment="1" FormatString="0" Width="100"
+                                 ToolTip.Tip="Frames"/>
+                </StackPanel>
+              </StackPanel>
+            </StackPanel>
+          </ScrollViewer>
+          <StackPanel x:Name="CiClassPreview" Grid.Column="2" Margin="8" Spacing="6">
+            <Border Background="Black" Width="512" Height="384" HorizontalAlignment="Left" IsVisible="{Binding HasPreview}">
+              <Image Source="{Binding PreviewImage}" Width="512" Height="384" RenderOptions.BitmapInterpolationMode="None"/>
+            </Border>
+            <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding HasPreview}">
+              <Button Content="{Binding AnimateLabel}" Click="Animate_Click" IsVisible="{Binding CiCanAnimate}"/>
+              <CheckBox Content="Girl player" IsChecked="{Binding PlayerGirl}" IsVisible="{Binding ShowPlayerChoice}"/>
+            </StackPanel>
+          </StackPanel>
+        </Grid>
+      </TabItem>
+
+      <!-- Motion tables the intro code reads: grunt emblem flights and the block wipe order -->
+      <TabItem Header="Motion" IsVisible="{Binding HasMotion}">
+        <Grid ColumnDefinitions="*,540">
+          <ScrollViewer Grid.Column="0" Margin="4">
+            <StackPanel Spacing="10" Margin="4">
+              <StackPanel Orientation="Horizontal" Spacing="6">
+                <TextBlock Text="{Binding GruntIntroName, StringFormat='{}{0} intro'}" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                <controls:HelpTip Text="Positions in pixels, speed in pixels a frame, wait in frames."/>
+              </StackPanel>
+              <Grid ColumnDefinitions="74,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto" Margin="0,0,0,-6">
+                <TextBlock Grid.Column="1" Text="Start X" Width="80"/>
+                <TextBlock Grid.Column="2" Text="Start Y" Width="80"/>
+                <TextBlock Grid.Column="3" Text="End X" Width="80"/>
+                <TextBlock Grid.Column="4" Text="End Y" Width="80"/>
+                <TextBlock Grid.Column="5" Text="Speed X" Width="80"/>
+                <TextBlock Grid.Column="6" Text="Speed Y" Width="80"/>
+                <TextBlock Grid.Column="7" Text="Wait" Width="80"/>
+                <TextBlock Grid.Column="8" Text="Turns" Width="80"/>
+              </Grid>
+              <ItemsControl ItemsSource="{Binding FlightRows}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="vm:FlightRow">
+                    <Grid ColumnDefinitions="74,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto" Margin="0,2">
+                      <TextBlock Text="{Binding Title}" VerticalAlignment="Center"/>
+                      <NumericUpDown Grid.Column="1" Width="80" Value="{Binding StartX}" Minimum="-4096" Maximum="4096" FormatString="0"/>
+                      <NumericUpDown Grid.Column="2" Width="80" Value="{Binding StartY}" Minimum="-4096" Maximum="4096" FormatString="0"/>
+                      <NumericUpDown Grid.Column="3" Width="80" Value="{Binding EndX}" Minimum="-4096" Maximum="4096" FormatString="0"/>
+                      <NumericUpDown Grid.Column="4" Width="80" Value="{Binding EndY}" Minimum="-4096" Maximum="4096" FormatString="0"/>
+                      <NumericUpDown Grid.Column="5" Width="80" Value="{Binding SpeedX}" Minimum="-4096" Maximum="4096" FormatString="0"/>
+                      <NumericUpDown Grid.Column="6" Width="80" Value="{Binding SpeedY}" Minimum="-4096" Maximum="4096" FormatString="0"/>
+                      <NumericUpDown Grid.Column="7" Width="80" Value="{Binding Wait}" Minimum="0" Maximum="255" FormatString="0"/>
+                      <NumericUpDown Grid.Column="8" Width="80" Value="{Binding Turns}" Minimum="-16" Maximum="16" FormatString="0"/>
+                    </Grid>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+
+              <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,8,0,0">
+                <TextBlock Text="Block wipe order" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                <controls:HelpTip Text="Fill order of the black blocks, 0 left to 7 right."/>
+              </StackPanel>
+              <TextBox Text="{Binding BlockOrderText}" Width="240" HorizontalAlignment="Left"/>
+              <TextBlock Text="{Binding BlockOrderError}" Foreground="{DynamicResource Editor.Warning}"
+                         IsVisible="{Binding BlockOrderError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+            </StackPanel>
+          </ScrollViewer>
+          <StackPanel Grid.Column="1" Margin="8" Spacing="6">
+            <Border Background="Black" Width="512" Height="384" HorizontalAlignment="Left">
+              <Image Source="{Binding MotionImage}" Width="512" Height="384" RenderOptions.BitmapInterpolationMode="None"/>
+            </Border>
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <Button Content="{Binding MotionPlayLabel}" Click="PlayMotion_Click"/>
+              <ComboBox ItemsSource="{Binding MotionShows}" SelectedIndex="{Binding MotionShow}" Width="200"/>
+            </StackPanel>
+          </StackPanel>
+        </Grid>
+      </TabItem>
+    </TabControl>
+  </DockPanel>
+</UserControl>

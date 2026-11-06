@@ -1,0 +1,69 @@
+using System.Collections.Generic;
+using System.IO;
+using DSPRE.ROMFiles;
+using static DSPRE.HgEngine.HgEngineSourcePatcher;
+
+namespace DSPRE.HgEngine
+{
+    /// <summary>Source-text read for data/SpriteOffsets.c's per-species SpriteFrameData (idle-animation
+    /// header, spriteYOffset, shadowXOffset, shadowSize). The compiled a180 narc lags behind once the
+    /// checkout grows past however many species existed at its last build; source doesn't.</summary>
+    public static class HgEngineSpriteOffsets
+    {
+        private const string SourceRelPath = "data/SpriteOffsets.c";
+
+        public static bool TryLoad(int speciesId, out HgEngineSourceBlock block, out string error)
+        {
+            block = default;
+            error = null;
+            if (!HgEngineProject.IsActive) { error = "No hg-engine checkout is linked."; return false; }
+            if (!HgEngineDesignators.TryResolve(HgEngineDomain.SpriteOffsets, speciesId, out string designator))
+            { error = $"Species {speciesId} has no SPECIES_ name in the checkout."; return false; }
+
+            string path = Path.Combine(HgEngineProject.RepoPathUnc, SourceRelPath.Replace('/', Path.DirectorySeparatorChar));
+            if (!File.Exists(path)) { error = $"{path} is missing from the checkout."; return false; }
+
+            string text = HgEngineFileCache.GetText(path);
+            if (!TryFindEntry(text, designator, out int open, out int close))
+            { error = $"SpriteOffsets.c has no entry for species {speciesId}."; return false; }
+
+            block = new HgEngineSourceBlock(text.Substring(open, close - open + 1));
+            return true;
+        }
+
+        /// <summary>Reads all 10 elements of a SpriteFrame[10] array (.frontFrames or .backFrames) verbatim,
+        /// for full-fidelity editing. Every slot matters to both the editor and playback: a frameNo below
+        /// -1 is a counted jump and -1 itself ends the run, so a truncated read misreads the animation.</summary>
+        public static List<SpriteFrameSlot> ReadFrameSlots(HgEngineSourceBlock block, string frameArrayField)
+        {
+            List<SpriteFrameSlot> slots = new List<SpriteFrameSlot>();
+            foreach (HgEngineSourceBlock el in block.GetArrayElements(new[] { FieldPathSegment.Field(frameArrayField) }))
+            {
+                el.TryGetInt(new[] { FieldPathSegment.Field("frameNo") }, out int frameNo);
+                el.TryGetInt(new[] { FieldPathSegment.Field("duration") }, out int duration);
+                el.TryGetInt(new[] { FieldPathSegment.Field("horizontalShift") }, out int hShift);
+                el.TryGetInt(new[] { FieldPathSegment.Field("verticalShift") }, out int vShift);
+                slots.Add(new SpriteFrameSlot(frameNo, duration, hShift, vShift));
+            }
+            return slots;
+        }
+
+        /// <summary>Builds the field writes for one full frontFrames/backFrames array (up to 40 fields);
+        /// merge with the other array's writes into a single <see cref="HgEngineWriter.TryWriteFields"/> call.</summary>
+        public static IEnumerable<HgEngineFieldWrite> BuildFrameWrites(string frameArrayField, IReadOnlyList<SpriteFrameSlot> slots)
+        {
+            for (int i = 0; i < slots.Count; i++)
+            {
+                SpriteFrameSlot s = slots[i];
+                FieldPathSegment[] Path(string field) => new[]
+                {
+                    FieldPathSegment.Field(frameArrayField), FieldPathSegment.At(i), FieldPathSegment.Field(field)
+                };
+                yield return new HgEngineFieldWrite(Path("frameNo"), s.FrameNo.ToString());
+                yield return new HgEngineFieldWrite(Path("duration"), s.Duration.ToString());
+                yield return new HgEngineFieldWrite(Path("horizontalShift"), s.HorizontalShift.ToString());
+                yield return new HgEngineFieldWrite(Path("verticalShift"), s.VerticalShift.ToString());
+            }
+        }
+    }
+}

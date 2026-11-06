@@ -1,0 +1,258 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+        xmlns:controls="clr-namespace:DSPRE.Avalonia.Controls"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:DSPRE.Avalonia.ViewModels.Trainers"
+        xmlns:ae="clr-namespace:AvaloniaEdit;assembly=AvaloniaEdit"
+        xmlns:av="clr-namespace:DSPRE.Avalonia"
+        xmlns:v="clr-namespace:DSPRE.Avalonia.Views.Controls"
+        x:Class="DSPRE.Avalonia.Views.Trainers.TrainerSpriteEditorView"
+        x:Name="RootWindow"
+        x:DataType="vm:TrainerSpriteEditorViewModel">
+  <Design.DataContext>
+    <vm:TrainerSpriteEditorViewModel/>
+  </Design.DataContext>
+
+  <UserControl.Styles>
+    <Style Selector="Border.swatch">
+      <Setter Property="BorderBrush" Value="{DynamicResource Editor.Border}"/>
+    </Style>
+    <Style Selector="TabControl.readonly /template/ ItemsPresenter#PART_ItemsPresenter">
+      <Setter Property="IsVisible" Value="False"/>
+    </Style>
+    <Style Selector="Border.swatch.selected">
+      <Setter Property="BorderBrush" Value="White"/>
+    </Style>
+  </UserControl.Styles>
+
+  <DockPanel>
+    <controls:EditorToolbar>
+        <Button x:Name="SaveButton" Content="Save" controls:Icon.Key="saveButton" Click="Save_Click" IsEnabled="{Binding HasUnsavedChanges}"/>
+        <Button Content="Discard" controls:Icon.Key="resetIcon" Click="Discard_Click" IsEnabled="{Binding HasUnsavedChanges}"/>
+        <controls:UndoRedoButtons/>
+        <Button x:Name="SpriteButtons" Content="Import PNG…" controls:Icon.Key="import" Click="Import_Click" ToolTip.Tip="Colours must match the palette. Export first for a template."/>
+        <Button Content="Export PNG…" controls:Icon.Key="export" Click="Export_Click"/>
+        <Button Content="Export sheet…" controls:Icon.Key="export" Click="ExportSheet_Click" IsVisible="{Binding CanUseSheets}"/>
+        <Button Content="Import sheet…" controls:Icon.Key="import" Click="ImportSheet_Click" IsVisible="{Binding CanUseSheets}"/>
+        <Button Content="Open in All graphics" controls:Icon.Key="OpenLink" Click="OpenInGraphics_Click" IsVisible="{Binding ShowsAnimationsTab}"/>
+        <StackPanel x:Name="SpritePicker" controls:EditorToolbar.Slot="Picker" Orientation="Horizontal" Spacing="6" Margin="12,2,6,2">
+          <TextBlock Text="{Binding ItemLabel}" VerticalAlignment="Center"/>
+          <controls:FusionAutoCompleteBox ItemsSource="{Binding ClassNames}" SelectedIndex="{Binding SelectedClassIndex}" Width="260"/>
+        </StackPanel>
+    </controls:EditorToolbar>
+
+  <DockPanel Margin="8">
+
+    <Border DockPanel.Dock="Bottom" Background="{DynamicResource Editor.StatusBg}" BorderBrush="{DynamicResource Editor.Border}"
+            BorderThickness="0,1,0,0" Padding="8,3" Margin="0,8,0,0">
+      <TextBlock Text="{Binding StatusText}" FontSize="11" Foreground="{DynamicResource Editor.Subtle}"/>
+    </Border>
+
+    <!-- The naming screen's top bar as the game draws it, with the icon playing in place. -->
+    <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="12" Margin="0,8,0,0" IsVisible="{Binding HasTopBar}">
+      <Border BorderBrush="{DynamicResource Editor.Border}" BorderThickness="1">
+        <Image Source="{Binding TopBarPreview}" Width="512" Height="96" RenderOptions.BitmapInterpolationMode="None"/>
+      </Border>
+      <StackPanel Spacing="4" VerticalAlignment="Center">
+        <TextBlock Text="Sample name"/>
+        <TextBox Text="{Binding SampleName}" Width="140" MaxLength="10"/>
+      </StackPanel>
+    </StackPanel>
+
+    <TabControl x:Name="OuterTabs" SelectionChanged="OuterTabs_SelectionChanged">
+      <TabItem Header="Sprite">
+        <DockPanel Margin="0,8,0,0">
+          <StackPanel x:Name="FrameStrip" DockPanel.Dock="Bottom" Spacing="4" Margin="0,8,0,0" IsVisible="{Binding HasFrames}"
+                      ToolTip.Tip="Frames that share tiles change together.">
+            <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding HasLinkedSets}">
+              <TextBlock Text="{Binding SelectedSetLabel, StringFormat='Painting: {0}'}" VerticalAlignment="Center"/>
+              <Button Content="Copy frame to other set" controls:Icon.Key="copy" Click="CopyFrameToOtherSet_Click"
+                      ToolTip.Tip="Paints this frame over the same frame of the other set"/>
+            </StackPanel>
+            <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled" MinHeight="84">
+              <ItemsControl ItemsSource="{Binding FrameThumbnails}">
+                <ItemsControl.ItemsPanel>
+                  <ItemsPanelTemplate>
+                    <StackPanel Orientation="Horizontal" Spacing="4"/>
+                  </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="vm:FrameThumbnailViewModel">
+                    <Border BorderBrush="{DynamicResource Editor.Border}" BorderThickness="1" Background="{DynamicResource Editor.PanelBg}"
+                            PointerPressed="Frame_PointerPressed" Tag="{Binding Index}" Cursor="Hand"
+                            ToolTip.Tip="{Binding Index, StringFormat='Frame {0}'}">
+                      <StackPanel>
+                        <Image Source="{Binding Image}" Width="80" Height="80" Stretch="Uniform"/>
+                        <TextBlock Text="{Binding Caption}" IsVisible="{Binding HasCaption}" FontSize="10"
+                                   HorizontalAlignment="Center" Foreground="{DynamicResource Editor.Subtle}"/>
+                      </StackPanel>
+                    </Border>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </ScrollViewer>
+          </StackPanel>
+
+          <!-- Left: tools + palette swatches -->
+          <DockPanel x:Name="PaletteColumn" DockPanel.Dock="Left" Width="150" Margin="0,0,8,0">
+            <StackPanel DockPanel.Dock="Top" Spacing="4" Margin="0,0,0,8">
+              <RadioButton GroupName="Tool" Content="Pencil" IsChecked="{Binding IsPencil}"/>
+              <RadioButton GroupName="Tool" Content="Eyedropper" IsChecked="{Binding IsEyedropper}"/>
+              <WrapPanel ItemSpacing="4" LineSpacing="4" Margin="0,4,0,0">
+                <Button Content="Zoom out" Click="ZoomOut_Click" IsEnabled="{Binding CanZoomOut}" ToolTip.Tip="Ctrl and the mouse wheel zoom too"/>
+                <Button Content="Zoom in" Click="ZoomIn_Click" IsEnabled="{Binding CanZoomIn}" ToolTip.Tip="Ctrl and the mouse wheel zoom too"/>
+              </WrapPanel>
+              <CheckBox Content="Pixel grid" IsChecked="{Binding ShowGrid, Mode=TwoWay}"/>
+            </StackPanel>
+
+            <StackPanel DockPanel.Dock="Top" Spacing="4">
+              <TextBlock Text="Palette" FontWeight="SemiBold" ToolTip.Tip="Shows the palette of the part last painted."/>
+              <Button Content="Edit colour" controls:Icon.Key="pencil" Click="EditColour_Click" HorizontalAlignment="Left"/>
+            </StackPanel>
+
+            <ScrollViewer>
+              <ItemsControl ItemsSource="{Binding PaletteSwatches}">
+                <ItemsControl.ItemsPanel>
+                  <ItemsPanelTemplate>
+                    <WrapPanel Orientation="Horizontal"/>
+                  </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="vm:PaletteSwatchViewModel">
+                    <Border Classes="swatch" Classes.selected="{Binding IsSelected}" Width="28" Height="28" Margin="2" BorderThickness="2"
+                            Background="{Binding Brush}" PointerPressed="Swatch_PointerPressed"
+                            DoubleTapped="Swatch_DoubleTapped" Tag="{Binding Index}"
+                            ToolTip.Tip="Double-click to edit"/>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </ScrollViewer>
+          </DockPanel>
+
+          <!-- Center: composited "as it looks" paint canvas (or the flat tile sheet on DP, which has no animation cells) -->
+          <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+            <Border BorderBrush="{DynamicResource Editor.Border}" BorderThickness="1" Background="{DynamicResource Editor.PanelBg}" HorizontalAlignment="Left" VerticalAlignment="Top">
+              <Panel PointerWheelChanged="Canvas_PointerWheelChanged">
+                <Image x:Name="CanvasImage" Source="{Binding CanvasBitmap}" Stretch="None"
+                       PointerPressed="Canvas_PointerPressed" PointerMoved="Canvas_PointerMoved" PointerReleased="Canvas_PointerReleased"/>
+                <v:PixelGrid Cell="{Binding ZoomFactor}" IsVisible="{Binding GridOn}" IsHitTestVisible="False"/>
+              </Panel>
+            </Border>
+          </ScrollViewer>
+        </DockPanel>
+      </TabItem>
+
+      <TabItem Header="Animations" IsVisible="{Binding ShowsAnimationsTab}">
+        <DockPanel Margin="0,8,0,0">
+          <TextBlock DockPanel.Dock="Top" Text="{Binding AnimJsonStatusText}" FontSize="11" Foreground="{DynamicResource Editor.Subtle}"
+                     TextWrapping="Wrap" Margin="0,0,0,8"
+                     IsVisible="{Binding AnimJsonStatusText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+
+          <Button DockPanel.Dock="Top" Content="Create anim.json" Click="CreateAnimJson_Click" HorizontalAlignment="Left" Margin="0,0,0,8"
+                  IsVisible="{Binding CanCreateAnimJson}"/>
+
+          <TabControl x:Name="AnimInnerTabs" SelectionChanged="AnimInnerTabs_SelectionChanged" IsVisible="{Binding HasAnimation}"
+                      Classes.readonly="{Binding !CanEditAnimJson}">
+            <TabItem Header="Editor">
+              <DockPanel Margin="0,8,0,0">
+                <TextBlock DockPanel.Dock="Top" Text="{Binding AnimModelStatusText}" FontSize="11" Foreground="{DynamicResource Editor.Warn}" TextWrapping="Wrap"
+                           Margin="0,0,0,8" IsVisible="{Binding AnimModelStatusText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+
+                <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="6" Margin="0,0,0,10">
+                  <TextBlock Text="Sequence" VerticalAlignment="Center"/>
+                  <ComboBox ItemsSource="{Binding AnimSequenceChoices}" SelectedItem="{Binding SelectedAnimSequence}" Width="220">
+                    <ComboBox.ItemTemplate>
+                      <DataTemplate x:DataType="vm:AnimSequenceChoiceViewModel">
+                        <TextBlock Text="{Binding DisplayName}"/>
+                      </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                  </ComboBox>
+                  <Button Content="Add sequence" controls:Icon.Key="addIcon" Click="AddSequence_Click" IsVisible="{Binding CanEditAnimJson}"/>
+                  <Button Content="Remove sequence" controls:Icon.Key="deleteIcon" Click="RemoveSequence_Click" IsVisible="{Binding CanEditAnimJson}" IsEnabled="{Binding HasSelectedAnimSequence}"/>
+                </StackPanel>
+
+                <Border DockPanel.Dock="Bottom" BorderBrush="{DynamicResource Editor.Border}" BorderThickness="1"
+                        Background="{DynamicResource Editor.PanelBg}" Padding="10" Margin="0,10,0,0">
+                  <StackPanel Orientation="Horizontal" Spacing="12">
+                    <Border Width="112" Height="112" Background="Black" BorderBrush="{DynamicResource Editor.Border}" BorderThickness="1">
+                      <Image Source="{Binding AnimPreviewBitmap}" Stretch="Uniform" Margin="4"/>
+                    </Border>
+                    <StackPanel Spacing="6" VerticalAlignment="Center">
+                      <Button Content="Play once" controls:Icon.Key="play" Click="PlayAnimPreview_Click" IsEnabled="{Binding !AnimPreviewPlaying}"/>
+                      <TextBlock Text="{Binding AnimPreviewFrameNumber, StringFormat='Frame {0}'}" FontSize="11"
+                                 Foreground="{DynamicResource Editor.Subtle}" IsVisible="{Binding AnimPreviewPlaying}"/>
+                    </StackPanel>
+                  </StackPanel>
+                </Border>
+
+                <!-- Frame list -->
+                <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+                  <StackPanel Orientation="Horizontal" Spacing="8">
+                    <ItemsControl ItemsSource="{Binding AnimFrameRows}">
+                      <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                          <StackPanel Orientation="Horizontal" Spacing="8"/>
+                        </ItemsPanelTemplate>
+                      </ItemsControl.ItemsPanel>
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:AnimFrameRowViewModel">
+                          <Border BorderBrush="{DynamicResource Editor.Border}" BorderThickness="1" Background="{DynamicResource Editor.PanelBg}"
+                                  Padding="8" Width="190">
+                            <StackPanel Spacing="6">
+                              <Border Width="72" Height="72" Background="Black" BorderBrush="{DynamicResource Editor.Border}" BorderThickness="1"
+                                      HorizontalAlignment="Center">
+                                <Image Source="{Binding Thumbnail}" Stretch="Uniform" Margin="2"/>
+                              </Border>
+
+                              <TextBlock Text="Pose" FontSize="10" Foreground="{DynamicResource Editor.Subtle}"/>
+                              <ComboBox ItemsSource="{Binding #RootWindow.DataContext.AnimCellChoices}"
+                                        SelectedIndex="{Binding CellIndex}" IsEnabled="{Binding #RootWindow.DataContext.CanEditAnimFrames}"
+                                        HorizontalAlignment="Stretch">
+                                <ComboBox.ItemTemplate>
+                                  <DataTemplate x:DataType="vm:AnimCellChoiceViewModel">
+                                    <TextBlock Text="{Binding Label}"/>
+                                  </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                              </ComboBox>
+
+                              <TextBlock Text="Delay" FontSize="10" Foreground="{DynamicResource Editor.Subtle}" ToolTip.Tip="In sixtieths of a second"/>
+                              <NumericUpDown Value="{Binding Delay}" Minimum="1" Maximum="600" Increment="1" FormatString="0"
+                                             IsEnabled="{Binding #RootWindow.DataContext.CanEditAnimFrames}"/>
+
+                              <StackPanel Orientation="Horizontal" Spacing="4" HorizontalAlignment="Center" Margin="0,4,0,0"
+                                          IsVisible="{Binding #RootWindow.DataContext.CanEditAnimJson}">
+                                <Button controls:Icon.Key="arrowup" Click="MoveFrameUp_Click" Padding="8,2" ToolTip.Tip="Move earlier"/>
+                                <Button controls:Icon.Key="arrowdown" Click="MoveFrameDown_Click" Padding="8,2" ToolTip.Tip="Move later"/>
+                                <Button controls:Icon.Key="Cross" Click="RemoveFrame_Click" Padding="8,2" ToolTip.Tip="Remove frame"/>
+                              </StackPanel>
+                            </StackPanel>
+                          </Border>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                    <Button Content="Add frame" controls:Icon.Key="addIcon" Click="AddFrame_Click" VerticalAlignment="Top" Margin="0,28,0,0"
+                            IsVisible="{Binding CanEditAnimJson}" IsEnabled="{Binding HasSelectedAnimSequence}"/>
+                  </StackPanel>
+                </ScrollViewer>
+              </DockPanel>
+            </TabItem>
+
+            <TabItem Header="JSON" IsVisible="{Binding CanEditAnimJson}">
+              <DockPanel Margin="0,8,0,0">
+                <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Spacing="6" Margin="0,8,0,0">
+                  <Button Content="Save animation JSON" controls:Icon.Key="saveButton" Click="SaveAnimJson_Click" IsEnabled="{Binding AnimJsonDirty}"/>
+                </StackPanel>
+                <ae:TextEditor x:Name="AnimJsonEditor" ShowLineNumbers="True" WordWrap="False"
+                               FontFamily="Consolas,monospace" FontSize="12"
+                               SyntaxHighlighting="{x:Static av:JsonSyntax.Definition}"
+                               BorderBrush="{DynamicResource Editor.Border}" BorderThickness="1"
+                               IsReadOnly="{Binding !CanEditAnimJson}"/>
+              </DockPanel>
+            </TabItem>
+          </TabControl>
+        </DockPanel>
+      </TabItem>
+    </TabControl>
+  </DockPanel>
+  </DockPanel>
+</UserControl>

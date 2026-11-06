@@ -1,0 +1,51 @@
+using Avalonia.Media.Imaging;
+using DSPRE.ROMFiles;
+
+namespace DSPRE.Avalonia.Data
+{
+    /// <summary>
+    /// Gauge pictures ready to show, so the three battle previews all use the ROM's letters instead of a desktop font.
+    /// </summary>
+    public static class GaugeTextImages
+    {
+        /// <summary>Whether the real pictures can be drawn, and why not when they cannot.</summary>
+        public static bool Available => BattleGaugeTextRenderer.IsAvailable;
+        public static string Unavailable => BattleGaugeTextRenderer.Unavailable;
+
+        public static Bitmap Name(string name) => Show(BattleGaugeTextRenderer.Name(name));
+
+        public static Bitmap Level(int level, BattleGaugeText.Gender gender = BattleGaugeText.Gender.Genderless)
+            => Show(BattleGaugeTextRenderer.LevelWithGender(level, gender));
+
+        public static Bitmap Health(int now, int most) => Show(BattleGaugeTextRenderer.HealthNumbers(now, most));
+
+        public static Bitmap Status(BattleGaugeText.Status status) => Show(BattleGaugeTextRenderer.StatusWord(status));
+
+        /// <summary>
+        /// One whole bar with its name and level already written into it, the way a battle does it.
+        /// Comes back null on games whose letters cannot be read, so callers keep their plain bar.
+        /// </summary>
+        public static Bitmap Bar(bool player, string name, int level,
+                                 BattleGaugeText.Gender gender = BattleGaugeText.Gender.Genderless,
+                                 BattleGaugeText.Status status = BattleGaugeText.Status.None)
+        {
+            BattleGaugeComposer.Drawn drawn = BattleGaugeComposer.Build(
+                player ? BattleGaugeComposer.Kind.PlayerSingle : BattleGaugeComposer.Kind.OpponentSingle,
+                new BattleGaugeComposer.Showing
+                {
+                    Name = name, Level = level, Gender = gender, Status = status,
+                    ShowHealthNumbers = player,
+                });
+            if (drawn?.Rgba == null) return null;
+            try { return ImageConverter.FromRgba(drawn.Rgba, drawn.Width, drawn.Height); }
+            catch (System.Exception ex) { AppLogger.WarnOnce("GaugeTextImages.Bar", ex); return null; }
+        }
+
+        private static Bitmap Show(BattleGaugeTextRenderer.Drawn drawn)
+        {
+            if (drawn?.Rgba == null) return null;
+            try { return ImageConverter.FromRgba(drawn.Rgba, drawn.Width, drawn.Height); }
+            catch (System.Exception ex) { AppLogger.WarnOnce("GaugeTextImages.Show", ex); return null; }
+        }
+    }
+}

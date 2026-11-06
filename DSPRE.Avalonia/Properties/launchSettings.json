@@ -1,0 +1,26 @@
+{
+  "profiles": {
+    "DSPRE (Avalonia)": {
+      "commandName": "Project"
+    },
+    "DSPRE (Avalonia, beta editors on)": {
+      "commandName": "Project",
+      "commandLineArgs": "--beta"
+    },
+    "DSPRE (Avalonia, WSL)": {
+      "commandName": "WSL2",
+      "distributionName": "Ubuntu",
+      "environmentVariables": {
+        "DISPLAY": ":0"
+      }
+    },
+    "DSPRE (Avalonia, WSL, beta editors on)": {
+      "commandName": "WSL2",
+      "distributionName": "Ubuntu",
+      "commandLineArgs": "--beta",
+      "environmentVariables": {
+        "DISPLAY": ":0"
+      }
+    }
+  }
+}

@@ -1,0 +1,65 @@
+<Window MinWidth="520" MinHeight="480" xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="clr-namespace:DSPRE.Avalonia.Controls"
+        xmlns:vm="clr-namespace:DSPRE.Avalonia.ViewModels.Graphics"
+        x:Class="DSPRE.Avalonia.Views.Graphics.BannerEditorView"
+        x:DataType="vm:BannerEditorViewModel"
+        Title="Game icon &amp; banner"
+        Width="560" Height="560"
+        WindowStartupLocation="CenterScreen">
+
+  <Design.DataContext>
+    <vm:BannerEditorViewModel/>
+  </Design.DataContext>
+
+  <DockPanel>
+    <Border DockPanel.Dock="Bottom" Background="{DynamicResource Editor.StatusBg}" BorderBrush="{DynamicResource Editor.Border}"
+            BorderThickness="0,1,0,0" Padding="8,3">
+      <TextBlock Text="{Binding StatusText}" FontSize="11" Foreground="{DynamicResource Editor.Subtle}" VerticalAlignment="Center"/>
+    </Border>
+
+    <controls:EditorToolbar>
+        <Button Content="Save" controls:Icon.Key="saveButton" Click="Save_Click" IsEnabled="{Binding HasUnsavedChanges}"/>
+        <Button Content="Discard" controls:Icon.Key="resetIcon" Click="Discard_Click" IsEnabled="{Binding HasUnsavedChanges}"/>
+        <controls:UndoRedoButtons/>
+    </controls:EditorToolbar>
+
+    <ScrollViewer>
+      <StackPanel Margin="12" Spacing="12">
+
+        <TextBlock Text="Game icon" FontWeight="SemiBold"/>
+        <StackPanel x:Name="IconRow" Orientation="Horizontal" Spacing="14" VerticalAlignment="Center">
+          <Border BorderBrush="{DynamicResource Editor.Border}" BorderThickness="1" Padding="4"
+                  Background="{DynamicResource Editor.PanelBg}">
+            <Image Source="{Binding IconPreview}" Width="128" Height="128"
+                   RenderOptions.BitmapInterpolationMode="None"/>
+          </Border>
+          <StackPanel Spacing="6" VerticalAlignment="Center">
+            <Button Content="Import…" controls:Icon.Key="import" Click="ImportIcon_Click"
+                    ToolTip.Tip="Replace the icon with a 32×32 PNG of up to 15 colours."/>
+            <Button Content="Export…" controls:Icon.Key="export" Click="ExportIcon_Click" ToolTip.Tip="PNG image"/>
+            <TextBlock Foreground="{DynamicResource Editor.Subtle}" Text="32×32 px, 15 colours and see-through" FontSize="11"/>
+          </StackPanel>
+        </StackPanel>
+
+        <Separator/>
+
+        <StackPanel Orientation="Horizontal">
+          <TextBlock Text="Menu titles" FontWeight="SemiBold"/>
+          <controls:HelpTip Text="The text under the icon in the DS menu, line breaks included."/>
+        </StackPanel>
+        <ItemsControl x:Name="TitlesList" ItemsSource="{Binding Titles}">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="vm:BannerEditorViewModel+TitleEntry">
+              <StackPanel Spacing="2" Margin="0,4,0,0">
+                <TextBlock Text="{Binding Label}" FontSize="12"/>
+                <TextBox Text="{Binding Text}" AcceptsReturn="True" MinHeight="52" FontSize="12"/>
+              </StackPanel>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+
+      </StackPanel>
+    </ScrollViewer>
+  </DockPanel>
+</Window>

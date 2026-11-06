@@ -1,0 +1,24 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:DSPRE.Avalonia.ViewModels.Graphics"
+        x:Class="DSPRE.Avalonia.Views.Graphics.OverworldProfilePickerView"
+        x:DataType="vm:OverworldProfilePickerViewModel"
+        Title="Choose overworld graphics profile"
+        Width="560" Height="300"
+        MinWidth="460" MinHeight="260"
+        WindowStartupLocation="CenterOwner">
+  <DockPanel Margin="12">
+    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right"
+                Spacing="8" Margin="0,12,0,0">
+      <Button Content="Use profile" Click="UseProfile_Click" IsDefault="True"/>
+      <Button Content="Cancel" Click="Cancel_Click" IsCancel="True"/>
+    </StackPanel>
+
+    <StackPanel Spacing="8">
+      <TextBlock Text="Pick a frame layout" TextWrapping="Wrap"/>
+      <ComboBox ItemsSource="{Binding Profiles}" SelectedItem="{Binding SelectedProfile}"
+                HorizontalAlignment="Stretch"/>
+
+    </StackPanel>
+  </DockPanel>
+</Window>

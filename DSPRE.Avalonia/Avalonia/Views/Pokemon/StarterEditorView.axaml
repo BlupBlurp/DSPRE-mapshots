@@ -1,0 +1,68 @@
+<Window MinWidth="480" MinHeight="260" xmlns="https://github.com/avaloniaui"
+		xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="clr-namespace:DSPRE.Avalonia.Controls"
+		xmlns:vm="clr-namespace:DSPRE.Avalonia.ViewModels.Pokemon"
+		x:Class="DSPRE.Avalonia.Views.Pokemon.StarterEditorView"
+		x:DataType="vm:StarterEditorViewModel"
+		Width="480" SizeToContent="Height"
+		WindowStartupLocation="CenterOwner">
+  <Design.DataContext>
+    <vm:StarterEditorViewModel/>
+  </Design.DataContext>
+
+  <DockPanel LastChildFill="True">
+	<controls:EditorToolbar>
+		<Button Content="Save" controls:Icon.Key="saveButton" Click="Save_Click" IsEnabled="{Binding HasUnsavedChanges}"/>
+		<Button Content="Discard" controls:Icon.Key="resetIcon" Click="Discard_Click" IsEnabled="{Binding HasUnsavedChanges}"/>
+		<controls:UndoRedoButtons/>
+		<TextBlock Foreground="{DynamicResource Editor.Subtle}" Text="{Binding BusyText}" IsVisible="{Binding IsBusy}" VerticalAlignment="Center" Margin="12,0,0,0"/>
+	</controls:EditorToolbar>
+
+	<Border Margin="12" BorderThickness="1" BorderBrush="{DynamicResource SystemControlForegroundBaseMediumBrush}" Padding="10">
+	  <StackPanel Spacing="8">
+		<StackPanel Orientation="Horizontal">
+		  <TextBlock Text="Starter Pokémon" FontWeight="Bold"/>
+		  <controls:HelpTip Text="Also updates the selection scene, the rival's team, tag partners, cries and the dialogue that names them."/>
+		</StackPanel>
+
+		<controls:CappedWidth Cap="560"><Grid x:Name="StarterGrid" ColumnDefinitions="Auto,*,36" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="8" RowSpacing="8" Margin="0,8,0,0">
+		  <TextBlock Grid.Row="0" Grid.Column="0" Text="Starter 1" VerticalAlignment="Center"/>
+		  <controls:FusionAutoCompleteBox controls:EditorLink.To="Pokemon"  Grid.Row="0" Grid.Column="1" ItemsSource="{Binding PokemonNames}" SelectedIndex="{Binding Starter1}" AllowsNone="False" HorizontalAlignment="Stretch" IsEnabled="{Binding SpeciesEditable}"/>
+		  <Image     Grid.Row="0" Grid.Column="2" Source="{Binding Starter1Icon}" Width="32" Height="32" Stretch="Uniform"/>
+
+		  <TextBlock Grid.Row="1" Grid.Column="0" Text="Starter 2" VerticalAlignment="Center"/>
+		  <controls:FusionAutoCompleteBox controls:EditorLink.To="Pokemon"  Grid.Row="1" Grid.Column="1" ItemsSource="{Binding PokemonNames}" SelectedIndex="{Binding Starter2}" AllowsNone="False" HorizontalAlignment="Stretch" IsEnabled="{Binding SpeciesEditable}"/>
+		  <Image     Grid.Row="1" Grid.Column="2" Source="{Binding Starter2Icon}" Width="32" Height="32" Stretch="Uniform"/>
+
+		  <TextBlock Grid.Row="2" Grid.Column="0" Text="Starter 3" VerticalAlignment="Center"/>
+		  <controls:FusionAutoCompleteBox controls:EditorLink.To="Pokemon"  Grid.Row="2" Grid.Column="1" ItemsSource="{Binding PokemonNames}" SelectedIndex="{Binding Starter3}" AllowsNone="False" HorizontalAlignment="Stretch" IsEnabled="{Binding SpeciesEditable}"/>
+		  <Image     Grid.Row="2" Grid.Column="2" Source="{Binding Starter3Icon}" Width="32" Height="32" Stretch="Uniform"/>
+
+		  <TextBlock Grid.Row="3" Grid.Column="0" Text="Held item" VerticalAlignment="Center" IsVisible="{Binding IsHeldItemSupported}"/>
+		  <controls:FusionAutoCompleteBox controls:EditorLink.To="Item"  Grid.Row="3" Grid.Column="1" ItemsSource="{Binding ItemNames}" SelectedIndex="{Binding HeldItem}" AllowsNone="False"
+					 HorizontalAlignment="Stretch" IsVisible="{Binding IsHeldItemSupported}"/>
+		  <Image     Grid.Row="3" Grid.Column="2" Source="{Binding HeldItemIcon}" Width="32" Height="32" Stretch="Uniform"
+					 IsVisible="{Binding IsHeldItemSupported}"/>
+
+		  <TextBlock Grid.Row="4" Grid.Column="0" Text="Level" VerticalAlignment="Center" IsVisible="{Binding IsLevelSupported}"/>
+		  <NumericUpDown Grid.Row="4" Grid.Column="1" Minimum="1" Maximum="100" Increment="1" FormatString="0"
+					    Value="{Binding StarterLevel}" HorizontalAlignment="Left" Width="110"
+					    IsVisible="{Binding IsLevelSupported}"/>
+
+		  <!-- Diamond and Pearl keep the held item and level in a script command, so say where. -->
+		  <TextBlock Foreground="{DynamicResource Editor.Subtle}" Grid.Row="5" Grid.Column="0" Grid.ColumnSpan="3" TextWrapping="Wrap" Margin="0,6,0,0" IsVisible="{Binding HasScriptNote}" Text="{Binding ScriptNote}"/>
+		</Grid></controls:CappedWidth>
+
+		<!-- Which command hands the starter over, and how to point the editor at a different one. -->
+		<StackPanel x:Name="CommandBar" Orientation="Horizontal" Spacing="8" Margin="0,4,0,0" IsVisible="{Binding CanManageCommand}">
+		  <TextBlock Foreground="{DynamicResource Editor.Subtle}" Text="{Binding CommandLocation}" VerticalAlignment="Center"
+					 IsVisible="{Binding HasCommandLocation}"/>
+		  <Button Content="Manage…" Click="Manage_Click"
+				  ToolTip.Tip="Choose which give-a-Pokémon command the editor treats as the starter"/>
+		  <TextBlock Foreground="{DynamicResource Editor.Warn}" Text="Scripts changed" VerticalAlignment="Center" IsVisible="{Binding CommandsHaveChanged}"
+					 ToolTip.Tip="The scripts changed after this command was picked"/>
+		</StackPanel>
+	  </StackPanel>
+	</Border>
+  </DockPanel>
+</Window>

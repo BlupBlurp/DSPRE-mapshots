@@ -1,0 +1,68 @@
+using System.Collections.Generic;
+using Avalonia.Controls;
+using Avalonia.Interactivity;
+using Avalonia.Platform.Storage;
+using DSPRE.Avalonia.ViewModels;
+
+namespace DSPRE.Avalonia.Views.Pokemon
+{
+    public partial class TrophyGardenEncounterView : UserControl
+    {
+        private TrophyGardenEncounterViewModel VM => DataContext as TrophyGardenEncounterViewModel;
+
+        public TrophyGardenEncounterView()
+        {
+            InitializeComponent();
+        }
+
+        public TrophyGardenEncounterView(TrophyGardenEncounterViewModel vm) : this()
+        {
+            DataContext = vm;
+        }
+
+        private void Save_Click(object sender, RoutedEventArgs e) => VM?.Save();
+        private async void Discard_Click(object sender, RoutedEventArgs e)
+        {
+            if (await DialogHelper.ConfirmDiscardAsync(this)) VM?.DiscardChanges();
+        }
+
+        private async void Export_Click(object sender, RoutedEventArgs e)
+        {
+            TopLevel top = TopLevel.GetTopLevel(this);
+            if (top == null || VM == null) return;
+
+            IStorageFile file = await top.StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+            {
+                Title = "Export Trophy Garden encounters",
+                DefaultExtension = "bin",
+                SuggestedFileName = "trophy_garden_encounters.bin",
+                FileTypeChoices = new List<FilePickerFileType> { new FilePickerFileType("Binary file") { Patterns = new[] { "*.bin" } } }
+            });
+            if (file == null) return;
+            string path = file.TryGetLocalPath();
+            if (path == null) return;
+            VM.Export(path);
+        }
+
+        private async void Import_Click(object sender, RoutedEventArgs e)
+        {
+            TopLevel top = TopLevel.GetTopLevel(this);
+            if (top == null || VM == null) return;
+
+            IReadOnlyList<IStorageFile> files = await top.StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+            {
+                Title = "Import Trophy Garden encounters",
+                AllowMultiple = false,
+                FileTypeFilter = new List<FilePickerFileType> { new FilePickerFileType("Binary file") { Patterns = new[] { "*.bin" } } }
+            });
+            if (files.Count == 0) return;
+            string path = files[0].TryGetLocalPath();
+            if (path == null) return;
+            VM.Import(path);
+        }
+
+        private void Locate_Click(object sender, RoutedEventArgs e) => VM?.Locate();
+
+        private void Help_Click(object sender, RoutedEventArgs e) => VM?.ShowHelp();
+    }
+}

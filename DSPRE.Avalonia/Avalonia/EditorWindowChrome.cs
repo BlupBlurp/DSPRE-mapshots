@@ -1,0 +1,145 @@
+using System;
+using System.ComponentModel;
+using System.Threading.Tasks;
+using System.Windows.Input;
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Input;
+using DSPRE.Editors;
+
+namespace DSPRE.Avalonia
+{
+    /// <summary>The "●" unsaved marker in the title, Ctrl+S and the close guard, for every editor window that calls Attach.</summary>
+    public static class EditorWindowChrome
+    {
+        /// <summary>
+        /// Awaits an editor save and verifies that it no longer reports unsaved changes.
+        /// </summary>
+        public static async Task<bool> TrySaveChangesAsync(
+            IEditorWithUnsavedChanges vm,
+            string action)
+        {
+            if (vm == null || !vm.HasUnsavedChanges)
+            {
+                return true;
+            }
+
+            string failure = await UnsavedChangesDialog.TrySaveEditorAsync(vm);
+            if (failure == null)
+            {
+                return true;
+            }
+
+            await DialogHelper.ShowErrorAsync(
+                $"Couldn't save {vm.UnsavedChangesDescription} before {action}:\n{failure}",
+                "Couldn't save");
+            return false;
+        }
+
+        /// <param name="manageTitle">When true, prefixes the window title with "● " while there are unsaved
+        /// changes. False leaves the title alone.</param>
+        /// <param name="title">The title without the marker, for a window whose title follows the record shown; it is
+        /// read again whenever the view model raises a change of "Title". The window's own Title is used when null.</param>
+        /// <param name="onClosed">Optional cleanup (e.g. <c>vm.Detach</c>) run exactly once when the window is
+        /// actually allowed to close, both on the clean path and after a confirmed discard.</param>
+        public static void Attach(
+            Window window,
+            IEditorWithUnsavedChanges vm,
+            bool manageTitle = true,
+            Action onClosed = null,
+            Func<string> title = null)
+        {
+            if (window == null || vm == null) return;
+
+            string fixedTitle = window.Title ?? "";
+            string BaseTitle() => title?.Invoke() ?? fixedTitle;
+            if (manageTitle)
+            {
+                void UpdateTitle() => window.Title = (vm.HasUnsavedChanges ? "● " : "") + BaseTitle();
+                UpdateTitle();
+                if (vm is INotifyPropertyChanged inpc)
+                    inpc.PropertyChanged += (_, e) =>
+                    {
+                        if (e.PropertyName == nameof(IEditorWithUnsavedChanges.HasUnsavedChanges) || (title != null && e.PropertyName == "Title"))
+                            UpdateTitle();
+                    };
+            }
+
+            window.KeyBindings.Add(new KeyBinding
+            {
+                Gesture = new KeyGesture(Key.S, KeyModifiers.Control),
+                Command = new RelayCommand(() =>
+                {
+                    if (vm.HasUnsavedChanges)
+                        _ = TrySaveChangesAsync(vm, "saving");
+                }),
+            });
+
+            // Ctrl+Z / Ctrl+Y for editors that support undo (same opt-in style as Ctrl+S).
+            if (vm is ISupportsUndo undo) AttachUndoKeys(window, undo);
+
+            // ── Close guard ───────────────────────────────────────────────────────────────────────
+            // One implementation for every editor. `confirmed` flips true once the user has approved the
+            // close so the second Closing (raised by our own Close() call) passes straight through.
+            bool confirmed = false;
+            window.Closing += async (_, e) =>
+            {
+                if (confirmed) return;
+
+                if (!vm.HasUnsavedChanges)   // nothing to lose, but still run cleanup once
+                {
+                    onClosed?.Invoke();
+                    return;
+                }
+
+                e.Cancel = true;
+
+                // Read when asking: editors such as the Pokémon editor retitle the window for each record.
+                string name = (window.Title ?? "").TrimStart('●', ' ');
+                bool proceed = await UnsavedChangesDialog.ShowIfNeededAsync(window, vm, name.Length > 0 ? name : BaseTitle());
+                if (proceed)
+                {
+                    confirmed = true;
+                    onClosed?.Invoke();
+                    window.Close();
+                }
+            };
+        }
+
+        /// <summary>Adds Ctrl+Z / Ctrl+Y key bindings driving an <see cref="ISupportsUndo"/>. Used by both
+        /// <see cref="Attach"/> (Window editors) and <c>EditorHostWindow</c> (UserControl editors hosted in it).</summary>
+        public static void AttachUndoKeys(Window window, ISupportsUndo undo)
+        {
+            if (window == null || undo == null) return;
+            window.KeyBindings.Add(new KeyBinding
+            {
+                Gesture = new KeyGesture(Key.Z, KeyModifiers.Control),
+                Command = new RelayCommand(() => { ISupportsUndo u = UndoTarget(window, undo); if (u.CanUndo) u.Undo(); }),
+            });
+            window.KeyBindings.Add(new KeyBinding
+            {
+                Gesture = new KeyGesture(Key.Y, KeyModifiers.Control),
+                Command = new RelayCommand(() => { ISupportsUndo u = UndoTarget(window, undo); if (u.CanRedo) u.Redo(); }),
+            });
+        }
+
+        // A tab with its own editor (trainer classes, each special encounter) undoes its own edits: the
+        // nearest undoable editor around the focused control wins over the window's.
+        private static ISupportsUndo UndoTarget(Window window, ISupportsUndo fallback)
+        {
+            for (Visual v = window.FocusManager?.GetFocusedElement() as global::Avalonia.Visual; v != null && v != window;
+                 v = global::Avalonia.VisualTree.VisualExtensions.GetVisualParent(v))
+                if (v is global::Avalonia.StyledElement se && se.DataContext is ISupportsUndo u) return u;
+            return fallback;
+        }
+
+        public sealed class RelayCommand : ICommand
+        {
+            private readonly Action _execute;
+            public RelayCommand(Action execute) => _execute = execute;
+            public bool CanExecute(object parameter) => true;
+            public void Execute(object parameter) => _execute();
+            public event EventHandler CanExecuteChanged { add { } remove { } }
+        }
+    }
+}

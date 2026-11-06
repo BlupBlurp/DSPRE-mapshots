@@ -1,0 +1,53 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:DSPRE.Avalonia.ViewModels.Pokemon"
+             xmlns:controls="clr-namespace:DSPRE.Avalonia.Controls"
+             x:Class="DSPRE.Avalonia.Views.Pokemon.BreedingItemsView"
+             x:DataType="vm:BreedingItemsViewModel">
+  <Design.DataContext>
+    <vm:BreedingItemsViewModel/>
+  </Design.DataContext>
+
+  <DockPanel>
+    <controls:EditorToolbar>
+        <Button Content="Save" controls:Icon.Key="saveButton" Click="Save_Click" IsEnabled="{Binding HasUnsavedChanges}"/>
+        <Button Content="Discard" controls:Icon.Key="resetIcon" Click="Discard_Click" IsEnabled="{Binding HasUnsavedChanges}"/>
+        <controls:UndoRedoButtons/>
+    </controls:EditorToolbar>
+
+    <TextBlock DockPanel.Dock="Bottom" Text="{Binding Problem}" IsVisible="{Binding HasProblem}" Margin="8,4"
+               Foreground="{DynamicResource Editor.Bad}" TextWrapping="Wrap"/>
+
+    <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+    <StackPanel Margin="10" Spacing="4">
+      <Grid ColumnDefinitions="30,236,236,236" Margin="0,0,0,2">
+        <TextBlock Grid.Column="0" Text="Row" FontWeight="SemiBold"/>
+        <TextBlock Grid.Column="1" Text="Baby" FontWeight="SemiBold"/>
+        <TextBlock Grid.Column="2" Text="Needs a parent holding" FontWeight="SemiBold"/>
+        <TextBlock Grid.Column="3" Text="Otherwise hatches" FontWeight="SemiBold"/>
+      </Grid>
+      <ItemsControl x:Name="BreedingRows" ItemsSource="{Binding Rows}">
+        <ItemsControl.ItemTemplate>
+          <DataTemplate x:DataType="vm:BreedingItemsViewModel+RowViewModel">
+            <Grid ColumnDefinitions="30,236,236,236" Margin="0,2">
+              <TextBlock Grid.Column="0" Text="{Binding Number}" VerticalAlignment="Center" Foreground="{DynamicResource Editor.Subtle}"/>
+              <DockPanel Grid.Column="1" Margin="0,0,8,0">
+                <Image DockPanel.Dock="Left" Width="32" Height="32" Margin="0,0,4,0" Source="{Binding Baby, Converter={x:Static controls:GameIconConverter.Pokemon}}"/>
+                <controls:FusionAutoCompleteBox controls:EditorLink.To="Pokemon" AllowsNone="False" ItemsSource="{Binding $parent[ItemsControl].((vm:BreedingItemsViewModel)DataContext).SpeciesNames}" SelectedIndex="{Binding Baby}"/>
+              </DockPanel>
+              <DockPanel Grid.Column="2" Margin="0,0,8,0">
+                <Image DockPanel.Dock="Left" Width="32" Height="32" Margin="0,0,4,0" Source="{Binding Item, Converter={x:Static controls:GameIconConverter.Item}}"/>
+                <controls:FusionAutoCompleteBox controls:EditorLink.To="Item" AllowsNone="False" ItemsSource="{Binding $parent[ItemsControl].((vm:BreedingItemsViewModel)DataContext).ItemNames}" SelectedIndex="{Binding Item}"/>
+              </DockPanel>
+              <DockPanel Grid.Column="3">
+                <Image DockPanel.Dock="Left" Width="32" Height="32" Margin="0,0,4,0" Source="{Binding Fallback, Converter={x:Static controls:GameIconConverter.Pokemon}}"/>
+                <controls:FusionAutoCompleteBox controls:EditorLink.To="Pokemon" AllowsNone="False" ItemsSource="{Binding $parent[ItemsControl].((vm:BreedingItemsViewModel)DataContext).SpeciesNames}" SelectedIndex="{Binding Fallback}"/>
+              </DockPanel>
+            </Grid>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+    </StackPanel>
+    </ScrollViewer>
+  </DockPanel>
+</UserControl>

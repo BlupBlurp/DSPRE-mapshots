@@ -1,0 +1,280 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.IO.Compression;
+using System.Linq;
+using System.Text;
+using YamlDotNet.Serialization;
+
+namespace DSPRE
+{
+    /// <summary>
+    /// The DS menu icon and titles: read from <c>banner.bin</c> on ndstool projects, edited in <c>banner/</c>
+    /// (yaml plus two PNGs) on ds-rom ones, which <c>dsrom build</c> encodes.
+    /// </summary>
+    public static class GameBanner
+    {
+        // banner.bin layout (Nintendo standard)
+        private const int IconBitmapOffset = 0x20;    // 4bpp, 4×4 tiles of 8×8 px = 512 bytes
+        private const int IconPaletteOffset = 0x220;  // 16 × BGR555 = 32 bytes
+        private const int TitleOffset = 0x240;        // 6 titles × 0x100 bytes UTF-16LE (JP,EN,FR,DE,IT,ES)
+        private const int TitleBytes = 0x100;
+
+        public const int IconSize = 32;
+        /// <summary>Palette slot 0 is hardware-transparent, leaving 15 usable colors.</summary>
+        public const int MaxOpaqueColors = 15;
+
+        // ── Legacy banner.bin (display only) ─────────────────────────────────────────
+
+        /// <summary>Decodes the 32×32 icon from a raw <c>banner.bin</c>. Palette index 0 comes out
+        /// transparent (as the DS menu renders it). Returns null if the file is missing/short.</summary>
+        public static RawImage ReadNdstoolIcon(string bannerBinPath)
+        {
+            if (!File.Exists(bannerBinPath)) return null;
+            byte[] data = File.ReadAllBytes(bannerBinPath);
+            if (data.Length < IconPaletteOffset + 32) return null;
+
+            (byte r, byte g, byte b)[] palette = new (byte r, byte g, byte b)[16];
+            for (int i = 0; i < 16; i++)
+            {
+                ushort v = (ushort)(data[IconPaletteOffset + i * 2] | (data[IconPaletteOffset + i * 2 + 1] << 8));
+                palette[i] = ((byte)((v & 0x1F) * 8), (byte)(((v >> 5) & 0x1F) * 8), (byte)(((v >> 10) & 0x1F) * 8));
+            }
+
+            RawImage img = new RawImage(IconSize, IconSize);
+            int pos = IconBitmapOffset;
+            for (int tileY = 0; tileY < 4; tileY++)
+                for (int tileX = 0; tileX < 4; tileX++)
+                    for (int y = 0; y < 8; y++)
+                        for (int xByte = 0; xByte < 4; xByte++)
+                        {
+                            byte px = data[pos++];
+                            int x = tileX * 8 + xByte * 2;
+                            SetPaletted(img, x, tileY * 8 + y, px & 0x0F, palette);
+                            SetPaletted(img, x + 1, tileY * 8 + y, px >> 4, palette);
+                        }
+            return img;
+        }
+
+        private static void SetPaletted(RawImage img, int x, int y, int palId, (byte r, byte g, byte b)[] palette)
+        {
+            (byte r, byte g, byte b) c = palette[palId];
+            img.SetPixel(x, y, c.r, c.g, c.b, palId == 0 ? (byte)0 : (byte)255);
+        }
+
+        /// <summary>Reads the English title block (up to 3 lines) from a raw <c>banner.bin</c>.</summary>
+        public static string ReadNdstoolTitle(string bannerBinPath)
+        {
+            try
+            {
+                byte[] data = File.ReadAllBytes(bannerBinPath);
+                int off = TitleOffset + TitleBytes; // JP first, then EN
+                if (data.Length < off + TitleBytes) return null;
+                string s = Encoding.Unicode.GetString(data, off, TitleBytes);
+                int nul = s.IndexOf('\0');
+                return (nul >= 0 ? s.Substring(0, nul) : s).Trim();
+            }
+            catch (Exception ex) { AppLogger.WarnOnce("GameBanner.ReadNdstoolTitle", ex); return null; }
+        }
+
+        // ── ds-rom banner folder ─────────────────────────────────────────────────────
+
+        public static string DsRomBannerDir => RomInfo.BannerPath;   // an hg-engine base project keeps it in base_dsrom/
+        public static string DsRomBitmapPath => Path.Combine(DsRomBannerDir, "bitmap.png");
+        public static string DsRomPalettePath => Path.Combine(DsRomBannerDir, "palette.png");
+        public static string DsRomYamlPath => Path.Combine(DsRomBannerDir, "banner.yaml");
+
+        /// <summary>Matches ds-rom's banner.yaml schema; <c>title</c> keys are language names
+        /// ("japanese", "english", …) and values are the 2-3 line menu text.</summary>
+        public class BannerYaml
+        {
+            [YamlMember(Alias = "version")]
+            public string Version { get; set; }
+            [YamlMember(Alias = "title")]
+            public Dictionary<string, string> Title { get; set; }
+            [YamlMember(Alias = "images")]
+            public BannerImages Images { get; set; }
+        }
+        public class BannerImages
+        {
+            [YamlMember(Alias = "bitmap_path")]
+            public string BitmapPath { get; set; }
+            [YamlMember(Alias = "palette_path")]
+            public string PalettePath { get; set; }
+        }
+
+        public static BannerYaml ReadDsRomYaml()
+        {
+            try
+            {
+                if (!File.Exists(DsRomYamlPath)) return null;
+                IDeserializer deserializer = new DeserializerBuilder().IgnoreUnmatchedProperties().Build();
+                return deserializer.Deserialize<BannerYaml>(File.ReadAllText(DsRomYamlPath));
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Error($"Couldn't parse banner.yaml: {ex.Message}");
+                return null;
+            }
+        }
+
+        public static void WriteDsRomYaml(BannerYaml banner)
+        {
+            ISerializer serializer = new SerializerBuilder().WithEventEmitter(next => new LiteralTitles(next)).Build();
+            string yaml = serializer.Serialize(banner);
+            // Keep the file's own line endings, so a title edit changes only that title's lines.
+            if (File.Exists(DsRomYamlPath) && File.ReadAllText(DsRomYamlPath).Contains("\r\n")) yaml = yaml.Replace("\r\n", "\n").Replace("\n", "\r\n");
+            PlainFiles.WriteText(DsRomYamlPath, yaml);
+        }
+
+        /// <summary>Writes multi-line titles as literal blocks (<c>|-</c>), the way ds-rom does.</summary>
+        private sealed class LiteralTitles : YamlDotNet.Serialization.EventEmitters.ChainedEventEmitter
+        {
+            public LiteralTitles(IEventEmitter next) : base(next) { }
+
+            public override void Emit(YamlDotNet.Serialization.ScalarEventInfo eventInfo, YamlDotNet.Core.IEmitter emitter)
+            {
+                if (eventInfo.Source.Value is string s && s.Contains('\n')) eventInfo.Style = YamlDotNet.Core.ScalarStyle.Literal;
+                base.Emit(eventInfo, emitter);
+            }
+        }
+
+        /// <summary>Why an image can't be the game icon, or null.</summary>
+        public static string IconProblem(RawImage img)
+        {
+            if (img == null) return "The image couldn't be decoded.";
+            if (img.Width != IconSize || img.Height != IconSize)
+                return $"The icon must be {IconSize}×{IconSize} pixels, and this image is {img.Width}×{img.Height}.";
+            HashSet<int> colours = new HashSet<int>();
+            byte[] src = img.Bgra;
+            for (int i = 0; i < src.Length; i += 4)
+                if (src[i + 3] >= 128) colours.Add((src[i + 2] << 16) | (src[i + 1] << 8) | src[i]);
+            return colours.Count > MaxOpaqueColors
+                ? $"A DS icon can have {MaxOpaqueColors} colours plus transparency, and this image has more."
+                : null;
+        }
+
+        public static string ValidateAndWriteDsRomIcon(RawImage img)
+        {
+            if (img == null) return "The image couldn't be decoded.";
+            if (img.Width != IconSize || img.Height != IconSize)
+                return $"The icon must be {IconSize}×{IconSize} pixels, and this image is {img.Width}×{img.Height}.";
+
+            // Normalize: alpha < 128 → the transparent slot; opaque pixels forced to alpha 255.
+            RawImage normalized = new RawImage(IconSize, IconSize);
+            List<(byte r, byte g, byte b)> opaqueColors = new List<(byte r, byte g, byte b)>();
+            Dictionary<int, int> colorIndex = new Dictionary<int, int>(); // packed rgb → palette slot (1-based)
+            byte[] src = img.Bgra, dst = normalized.Bgra;
+            for (int i = 0; i < src.Length; i += 4)
+            {
+                if (src[i + 3] < 128) continue; // stays (0,0,0,0)
+                byte b = src[i], g = src[i + 1], r = src[i + 2];
+                int key = (r << 16) | (g << 8) | b;
+                if (!colorIndex.ContainsKey(key))
+                {
+                    if (opaqueColors.Count >= MaxOpaqueColors)
+                        return $"A DS icon can have {MaxOpaqueColors} colours plus transparency, " +
+                               "and this image has more.";
+                    colorIndex[key] = opaqueColors.Count + 1;
+                    opaqueColors.Add((r, g, b));
+                }
+                dst[i] = b; dst[i + 1] = g; dst[i + 2] = r; dst[i + 3] = 255;
+            }
+
+            RawImage palette = new RawImage(16, 1);
+            for (int slot = 0; slot < opaqueColors.Count; slot++)
+            {
+                (byte r, byte g, byte b) c = opaqueColors[slot];
+                palette.SetPixel(slot + 1, 0, c.r, c.g, c.b, 255);
+            }
+
+            Directory.CreateDirectory(DsRomBannerDir);
+            WritePng(DsRomBitmapPath, normalized);
+            WritePng(DsRomPalettePath, palette);
+            return null;
+        }
+
+        // ── Minimal PNG writer (RGBA8, no interlace) ─────────────────────────────────
+        // Kept dependency-free so headless code (tests, future CLI) can write banner images
+        // without a UI toolkit's encoder.
+
+        public static void WritePng(string path, RawImage img) => PlainFiles.WriteBytes(path, EncodePng(img));
+
+        public static byte[] EncodePng(RawImage img)
+        {
+            using MemoryStream ms = new MemoryStream();
+
+            // Raw scanlines, filter byte 0 per row, RGBA order.
+            byte[] raw = new byte[img.Height * (1 + img.Width * 4)];
+            int p = 0;
+            for (int y = 0; y < img.Height; y++)
+            {
+                raw[p++] = 0;
+                for (int x = 0; x < img.Width; x++)
+                {
+                    int i = (y * img.Width + x) * 4;
+                    raw[p++] = img.Bgra[i + 2]; // R
+                    raw[p++] = img.Bgra[i + 1]; // G
+                    raw[p++] = img.Bgra[i];     // B
+                    raw[p++] = img.Bgra[i + 3]; // A
+                }
+            }
+
+            byte[] compressed;
+            using (MemoryStream cms = new MemoryStream())
+            {
+                using (ZLibStream z = new ZLibStream(cms, CompressionLevel.Optimal, leaveOpen: true))
+                    z.Write(raw, 0, raw.Length);
+                compressed = cms.ToArray();
+            }
+
+            ms.Write(new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A }, 0, 8);
+
+            byte[] ihdr = new byte[13];
+            WriteBE(ihdr, 0, img.Width);
+            WriteBE(ihdr, 4, img.Height);
+            ihdr[8] = 8;   // bit depth
+            ihdr[9] = 6;   // color type: RGBA
+            WriteChunk(ms, "IHDR", ihdr);
+            WriteChunk(ms, "IDAT", compressed);
+            WriteChunk(ms, "IEND", Array.Empty<byte>());
+            return ms.ToArray();
+        }
+
+        private static void WriteBE(byte[] buf, int off, int value)
+        {
+            buf[off] = (byte)(value >> 24); buf[off + 1] = (byte)(value >> 16);
+            buf[off + 2] = (byte)(value >> 8); buf[off + 3] = (byte)value;
+        }
+
+        private static void WriteChunk(Stream s, string type, byte[] data)
+        {
+            byte[] len = new byte[4]; WriteBE(len, 0, data.Length);
+            s.Write(len, 0, 4);
+            byte[] typeBytes = Encoding.ASCII.GetBytes(type);
+            s.Write(typeBytes, 0, 4);
+            s.Write(data, 0, data.Length);
+            uint crc = Crc32(typeBytes, data);
+            byte[] crcBytes = new byte[4]; WriteBE(crcBytes, 0, (int)crc);
+            s.Write(crcBytes, 0, 4);
+        }
+
+        private static uint[] _crcTable;
+        private static uint Crc32(byte[] type, byte[] data)
+        {
+            if (_crcTable == null)
+            {
+                _crcTable = new uint[256];
+                for (uint n = 0; n < 256; n++)
+                {
+                    uint c = n;
+                    for (int k = 0; k < 8; k++) c = (c & 1) != 0 ? 0xEDB88320 ^ (c >> 1) : c >> 1;
+                    _crcTable[n] = c;
+                }
+            }
+            uint crc = 0xFFFFFFFF;
+            foreach (byte b in type.Concat(data)) crc = _crcTable[(crc ^ b) & 0xFF] ^ (crc >> 8);
+            return crc ^ 0xFFFFFFFF;
+        }
+    }
+}

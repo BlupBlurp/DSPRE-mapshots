@@ -1,0 +1,62 @@
+﻿﻿using System;
+using System.IO;
+using static DSPRE.RomInfo;
+
+namespace DSPRE.ROMFiles
+{
+    public abstract class RomFile
+    {
+        public abstract byte[] ToByteArray();
+        public bool SaveToFile(string path, bool showSuccessMessage = true)
+        {
+            
+            byte[] romFileToByteArray = ToByteArray();
+            if (romFileToByteArray is null)
+            {
+                AppLogger.Error(GetType().Name + " couldn't be saved.");
+                return false;
+            }
+
+            ArchiveMembers.Write(path, romFileToByteArray);
+
+            if (showSuccessMessage)
+            {
+                AppMessages.Info($"Saved {GetType().Name} {Path.GetFileName(path)}.");
+            }
+
+            return true;
+        }
+        protected internal bool SaveToFileDefaultDir(DirNames dir, int IDtoReplace, bool showSuccessMessage = true)
+        {
+            byte[] romFileToByteArray = ToByteArray();
+            if (romFileToByteArray is null)
+            {
+                AppLogger.Error(GetType().Name + " couldn't be saved.");
+                return false;
+            }
+
+            ArchiveMembers.Put(dir, IDtoReplace, romFileToByteArray);
+
+            if (showSuccessMessage)
+            {
+                AppMessages.Info($"Saved {GetType().Name} {IDtoReplace:D4}.");
+            }
+
+            return true;
+        }
+        protected internal void SaveToFileExplorePath(string fileType, string fileExtension, string suggestedFileName, bool showSuccessMessage = true)
+        {
+            fileExtension = "*." + fileExtension;
+
+            string chosen = AppMessages.PickSaveFile($"Export {fileType}",
+                $"{fileType} ({fileExtension})|{fileExtension}", suggestedFileName);
+
+            if (string.IsNullOrEmpty(chosen))
+            {
+                return;
+            }
+
+            this.SaveToFile(chosen, showSuccessMessage);
+        }
+    }
+}

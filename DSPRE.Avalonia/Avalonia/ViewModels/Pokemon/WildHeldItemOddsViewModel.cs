@@ -1,0 +1,126 @@
+using System;
+using System.ComponentModel;
+using System.IO;
+using System.Runtime.CompilerServices;
+using System.Threading.Tasks;
+using DSPRE.Editors;
+using DSPRE.ROMFiles;
+
+namespace DSPRE.Avalonia.ViewModels.Pokemon
+{
+    /// <summary>How often wild Pokémon hold their common or rare item, normally and with a Compound Eyes lead.</summary>
+    public class WildHeldItemOddsViewModel : INotifyPropertyChanged, IEditorWithUnsavedChanges, ISupportsUndo
+    {
+        public event PropertyChangedEventHandler PropertyChanged;
+        private void Raise([CallerMemberName] string n = null) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(n));
+
+        private WildHeldItemOdds _odds;
+        private byte[] _saved;
+
+        private ByteStateUndo _undo;
+        private void StartUndo() => _undo = new ByteStateUndo(() => _odds.ToBytes(), b => { _odds = new WildHeldItemOdds(b); RaiseAll(); }, () => { Raise(nameof(CanUndo)); Raise(nameof(CanRedo)); });
+        public bool CanUndo => _undo?.CanUndo == true;
+        public bool CanRedo => _undo?.CanRedo == true;
+        public void Undo() => _undo?.Undo();
+        public void Redo() => _undo?.Redo();
+
+        public WildHeldItemOddsViewModel() { }
+
+        public WildHeldItemOddsViewModel(bool load) { if (load) Load(); }
+
+        private void Load()
+        {
+            _odds = WildHeldItemOdds.Load();
+            _saved = _odds.ToBytes();
+            StartUndo();
+            RaiseAll();
+        }
+
+        private int Get(Func<WildHeldItemOdds, int> read) => _odds == null ? 0 : read(_odds);
+
+        private void Change(Action<WildHeldItemOdds> change)
+        {
+            if (_odds == null) return;
+            change(_odds);
+            RaiseAll();
+            _undo?.Record();
+        }
+
+        // Each row edits "none" and "common"; "rare" is whatever is left of 100.
+        public decimal NormalNone
+        {
+            get => Get(o => o.Normal.NonePercent);
+            set => Change(o => { int common = o.Normal.CommonPercent; o.Normal.NoneBelow = Clamp(value); o.Normal.RareFrom = Math.Min(100, o.Normal.NoneBelow + common); });
+        }
+        public decimal NormalCommon
+        {
+            get => Get(o => o.Normal.CommonPercent);
+            set => Change(o => o.Normal.RareFrom = Math.Min(100, o.Normal.NoneBelow + Clamp(value)));
+        }
+        public string NormalRare => $"{Get(o => o.Normal.RarePercent)}%";
+
+        public decimal EyesNone
+        {
+            get => Get(o => o.CompoundEyes.NonePercent);
+            set => Change(o => { int common = o.CompoundEyes.CommonPercent; o.CompoundEyes.NoneBelow = Clamp(value); o.CompoundEyes.RareFrom = Math.Min(100, o.CompoundEyes.NoneBelow + common); });
+        }
+        public decimal EyesCommon
+        {
+            get => Get(o => o.CompoundEyes.CommonPercent);
+            set => Change(o => o.CompoundEyes.RareFrom = Math.Min(100, o.CompoundEyes.NoneBelow + Clamp(value)));
+        }
+        // Common can't take more than None leaves.
+        public decimal NormalCommonMax => 100 - NormalNone;
+        public decimal EyesCommonMax => 100 - EyesNone;
+        public string EyesRare => $"{Get(o => o.CompoundEyes.RarePercent)}%";
+
+        private static int Clamp(decimal v) => (int)Math.Clamp(v, 0, 100);
+
+        public System.Collections.Generic.IReadOnlyList<DSPRE.Avalonia.Controls.BarPart> NormalParts => Parts(_odds?.Normal);
+        public System.Collections.Generic.IReadOnlyList<DSPRE.Avalonia.Controls.BarPart> EyesParts => Parts(_odds?.CompoundEyes);
+
+        private static System.Collections.Generic.IReadOnlyList<DSPRE.Avalonia.Controls.BarPart> Parts(WildHeldItemOdds.Row split) => split == null ? null : new[]
+        {
+            new DSPRE.Avalonia.Controls.BarPart { Value = split.NonePercent, Label = $"No item {split.NonePercent}%", Colour = global::Avalonia.Media.Color.FromRgb(0x55, 0x5B, 0x66) },
+            new DSPRE.Avalonia.Controls.BarPart { Value = split.CommonPercent, Label = $"Common {split.CommonPercent}%", Colour = global::Avalonia.Media.Color.FromRgb(0x3A, 0x7B, 0xC8) },
+            new DSPRE.Avalonia.Controls.BarPart { Value = split.RarePercent, Label = $"Rare {split.RarePercent}%", Colour = global::Avalonia.Media.Color.FromRgb(0xC8, 0x9B, 0x2E) },
+        };
+
+        public bool HasUnsavedChanges => _odds != null && !_odds.ToBytes().AsSpan().SequenceEqual(_saved);
+        public string UnsavedChangesDescription => "Wild held item odds";
+
+        private void RaiseAll()
+        {
+            foreach (string n in new[] { nameof(NormalNone), nameof(NormalCommon), nameof(NormalRare),
+                                      nameof(EyesNone), nameof(EyesCommon), nameof(EyesRare), nameof(HasUnsavedChanges),
+                                      nameof(NormalCommonMax), nameof(EyesCommonMax), nameof(NormalParts), nameof(EyesParts) })
+                Raise(n);
+        }
+
+        public void SaveChanges() => DialogHelper.Watch(SaveChangesAsync());
+
+        public async Task<bool> SaveChangesAsync()
+        {
+            if (_odds == null) return true;
+            if (_odds.Problem() is string problem) { await DialogHelper.ShowErrorAsync(problem, "Wild held items"); return false; }
+            try { _odds.Save(); }
+            catch (Exception e) when (e is IOException || e is InvalidOperationException || e is UnauthorizedAccessException)
+            {
+                await DialogHelper.ShowErrorAsync("The odds weren't saved:\n" + e.Message, "Wild held items");
+                return false;
+            }
+            _saved = _odds.ToBytes();
+            Raise(nameof(HasUnsavedChanges));
+            SaveNotice.Saved(UnsavedChangesDescription);
+            return true;
+        }
+
+        public void DiscardChanges()
+        {
+            if (_saved == null) return;
+            _odds = new WildHeldItemOdds(_saved);
+            StartUndo();
+            RaiseAll();
+        }
+    }
+}

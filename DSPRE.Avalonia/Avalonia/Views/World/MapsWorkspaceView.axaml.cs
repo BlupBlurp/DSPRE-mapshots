@@ -1,0 +1,531 @@
+using System.Collections.Generic;
+using System.Linq;
+using Avalonia.Controls;
+using Avalonia.LogicalTree;
+using DSPRE.Avalonia.Controls;
+using Avalonia.Interactivity;
+using DSPRE.Avalonia;
+using DSPRE.Editors;
+using DSPRE.Avalonia.ViewModels;
+using DSPRE.Resources;
+using static DSPRE.RomInfo;
+using DSPRE.ROMFiles;
+
+namespace DSPRE.Avalonia.Views.World
+{
+    /// <summary>
+    /// The Maps workspace: the header sidebar, a context strip and tabs that follow the selected header; the sidebar
+    /// menu can open any of them in a window.
+    /// </summary>
+    public partial class MapsWorkspaceView : UserControl
+    {
+        private HeaderEditorViewModel VM => DataContext as HeaderEditorViewModel;
+        // Wires events once; data setup reruns on every ROM load.
+        private bool _wiringDone;
+
+        // The tabs are UserControls because a Window can't be embedded. A tab opened alone sits in an EditorHostWindow,
+        // and EnsureSetupAsync reruns on every ROM load.
+        public EventEditorViewModel EventVM { get; } = new EventEditorViewModel(true);
+        public MapEditorViewModel MapVM { get; } = new MapEditorViewModel(true);
+        public MatrixEditorViewModel MatrixVM { get; } = new MatrixEditorViewModel(true);
+        public AreaDataEditorViewModel AreaDataVM { get; } = new AreaDataEditorViewModel(true);
+        public ScriptEditorViewModel ScriptsVM { get; } = new ScriptEditorViewModel(true);
+        public LevelScriptEditorViewModel LevelScriptsVM { get; } = new LevelScriptEditorViewModel(true);
+        public TextEditorViewModel TextVM { get; } = new TextEditorViewModel(true);
+
+        // The Wild Pokémon editor needs game paths that don't exist at boot, and its view model depends on the game
+        // family, so it's built in EnsureSetupAsync.
+        private object _encountersVm;
+        private bool _encountersEmbedded;
+
+        public MapsWorkspaceView()
+        {
+            InitializeComponent();
+            Loaded += OnLoadedSetup;
+            // Each tab offers its own tour the first time it is on screen; the Header tab shares the Header editor's.
+            EditorTours.Attach(HeaderTabRoot, "HeaderEditorView");
+            foreach (Control tab in new Control[] { MapEmbed, EventsEmbed, MatrixEmbed, AreaDataEmbed, ScriptsEmbed, LevelScriptsEmbed, TextEmbed })
+                EditorTours.Attach(tab, tab.GetType().Name);
+            foreach ((Control root, string tab) in new (Control, string)[] { (HeaderTabRoot, "Header"), (MapEmbed, "Map"), (EventsEmbed, "Events"), (MatrixEmbed, "Matrix"),
+                                                                           (AreaDataEmbed, "Area Data"), (ScriptsEmbed, "Scripts"), (LevelScriptsEmbed, "Level Scripts"), (TextEmbed, "Text") })
+                OfferPopOut(root, tab);
+        }
+
+        /// <summary>Puts "Open in window" on the embedded editor's own toolbar, since it opens that editor alone.</summary>
+        private void OfferPopOut(Control root, string tab)
+        {
+            EditorToolbar toolbar = root.GetLogicalDescendants().OfType<EditorToolbar>().FirstOrDefault();
+            if (toolbar != null) toolbar.PopOut = () => PopOut(tab);
+        }
+
+        // Ctrl+Z / Ctrl+Y undo the tab on show. Listened for on the window, so it also works while nothing
+        // inside the tab has focus; the main window has no undo of its own.
+        private TopLevel _undoTop;
+        protected override void OnAttachedToVisualTree(global::Avalonia.VisualTreeAttachmentEventArgs e)
+        {
+            base.OnAttachedToVisualTree(e);
+            _undoTop = TopLevel.GetTopLevel(this);
+            _undoTop?.AddHandler(KeyDownEvent, RouteUndo, global::Avalonia.Interactivity.RoutingStrategies.Tunnel);
+        }
+
+        protected override void OnDetachedFromVisualTree(global::Avalonia.VisualTreeAttachmentEventArgs e)
+        {
+            _undoTop?.RemoveHandler(KeyDownEvent, RouteUndo);
+            _undoTop = null;
+            base.OnDetachedFromVisualTree(e);
+        }
+
+        private object SelectedTabEditor() =>
+            ((MapTabs.SelectedItem as TabItem) is TabItem t ? global::Avalonia.Automation.AutomationProperties.GetName(t) : null) switch
+            {
+                "Header" => VM,
+                "Map" => MapVM,
+                "Events" => EventVM,
+                "Matrix" => MatrixVM,
+                "Area Data" => AreaDataVM,
+                "Encounters" => _encountersVm,
+                "Scripts" => ScriptsVM,
+                "Level Scripts" => LevelScriptsVM,
+                "Text" => TextVM,
+                _ => null,
+            };
+
+        private void RouteUndo(object sender, global::Avalonia.Input.KeyEventArgs e)
+        {
+            if (!IsEffectivelyVisible || e.KeyModifiers != global::Avalonia.Input.KeyModifiers.Control
+                || (e.Key != global::Avalonia.Input.Key.Z && e.Key != global::Avalonia.Input.Key.Y)) return;
+            // A text box keeps its own undo.
+            if (e.Source is TextBox || e.Source is AvaloniaEdit.Editing.TextArea) return;
+            object editor = SelectedTabEditor();
+            if (editor == null) return;
+            e.Handled = true;
+            if (editor is DSPRE.Avalonia.ISupportsUndo undo)
+            {
+                if (e.Key == global::Avalonia.Input.Key.Z && undo.CanUndo) undo.Undo();
+                else if (e.Key == global::Avalonia.Input.Key.Y && undo.CanRedo) undo.Redo();
+            }
+        }
+
+        public IEnumerable<(string EditorName, IEditorWithUnsavedChanges Editor)> GetEmbeddedEditors()
+        {
+            List<(string, IEditorWithUnsavedChanges)> editors = new List<(string, IEditorWithUnsavedChanges)>();
+            void Add(string name, IEditorWithUnsavedChanges editor)
+            {
+                if (editor != null) editors.Add((name, editor));
+            }
+
+            Add("Header editor", VM);
+            Add("Map editor", MapVM);
+            Add("Matrix editor", MatrixVM);
+            Add("Area data editor", AreaDataVM);
+            Add("Event editor", EventVM);
+            Add("Script editor", ScriptsVM);
+            Add("Level script editor", LevelScriptsVM);
+            Add("Text editor", TextVM);
+            Add("Wild Pokémon editor", _encountersVm as IEditorWithUnsavedChanges);
+            return editors;
+        }
+
+        private async void OnLoadedSetup(object sender, RoutedEventArgs e) => await EnsureSetupAsync();
+
+        /// <summary>
+        /// Workspace setup. No-ops until a ROM is loaded; the workspace is created at app boot,
+        /// before any ROM; <see cref="MainWindowView"/> re-invokes this after EVERY successful load,
+        /// including switching to a different ROM mid-session, so the data-refresh portion below
+        /// always re-runs (only the event-subscription wiring is one-time, guarded by
+        /// <see cref="_wiringDone"/>).
+        /// </summary>
+        public async System.Threading.Tasks.Task EnsureSetupAsync()
+        {
+            if (Design.IsDesignMode) return;
+            HeaderEditorViewModel vm = VM;
+            if (vm == null || !AvaloniaEditorLauncher.IsRomLoaded) return;
+            Window owner = TopLevel.GetTopLevel(this) as Window;
+            if (owner == null) return;
+            // Tabs must unpack this ROM's archives before loading a new header, so header changes wait for setup.
+            _settingUp = true;
+            try { await SetUpTabsAsync(vm, owner); }
+            finally { _settingUp = false; }
+        }
+
+        private bool _settingUp;
+
+        private async System.Threading.Tasks.Task SetUpTabsAsync(HeaderEditorViewModel vm, Window owner)
+        {
+            await vm.SetupAsync(owner);
+
+            if (!_wiringDone)
+            {
+                _wiringDone = true;
+                owner.Activated += (_, _) => vm.ReloadLocationNames();
+                vm.OpenInTab = ShowTab;
+                vm.LinkedEditsWouldMove = id => TabsLeavingEdits(id).GetEnumerator().MoveNext();
+                vm.ConfirmLinkedTabsAsync = async id =>
+                {
+                    foreach ((IEditorWithUnsavedChanges editor, string what) in TabsLeavingEdits(id))
+                        if (!await RecordSwitchGuard.ConfirmLeaveAsync(editor, owner, what)) return false;
+                    return true;
+                };
+                vm.PropertyChanged += (_, e) =>
+                {
+                    if (_settingUp) return;
+                    switch (e.PropertyName)
+                    {
+                        case nameof(HeaderEditorViewModel.EventFileId): RetargetEvents(); break;
+                        case nameof(HeaderEditorViewModel.MatrixId): RetargetMatrix(); break;
+                        case nameof(HeaderEditorViewModel.AreaDataId): RetargetAreaData(); break;
+                        case nameof(HeaderEditorViewModel.ScriptFileId): RetargetScripts(); break;
+                        case nameof(HeaderEditorViewModel.LevelScriptId): RetargetLevelScripts(); break;
+                        case nameof(HeaderEditorViewModel.TextArchiveId): RetargetText(); break;
+                        case nameof(HeaderEditorViewModel.WildPokemon): RetargetEncounters(); break;
+                        case nameof(HeaderEditorViewModel.CurrentHeaderId): MapVM.HeaderId = vm.CurrentHeaderId; MatrixVM.FocusHeader = vm.CurrentHeaderId; break;
+                    }
+                };
+            }
+
+            // Every tab follows the header's linked file; reset on each ROM load so an equal id still reloads.
+            EventVM.InitialIndex = (int)vm.EventFileId;
+            MatrixVM.InitialIndex = (int)vm.MatrixId;
+            MatrixVM.FocusHeader = vm.CurrentHeaderId;
+            MatrixVM.OpenHeader = id => vm.GoToHeader(id);
+            AreaDataVM.InitialIndex = (int)vm.AreaDataId;
+            ScriptsVM.InitialIndex = (int)vm.ScriptFileId;
+            LevelScriptsVM.InitialIndex = (int)vm.LevelScriptId;
+            // The preview runs what the map runs by itself, so the events tab needs to know which
+            // level script file the header points at.
+            EventVM.LevelScriptId = (int)vm.LevelScriptId;
+            EventVM.TextArchiveId = (int)vm.TextArchiveId;
+            TextVM.InitialIndex = (int)vm.TextArchiveId;
+
+            // Pass the owner: an unselected tab has no TopLevel yet.
+            await EventsEmbed.EnsureSetupAsync(owner);
+            await MapEmbed.EnsureSetupAsync(owner);
+            // Default the Map tab to This header once setup has unpacked what it needs; reset first to force a rebuild.
+            MapVM.ViewModeIndex = 0;
+            MapVM.HeaderId = -1;
+            MapVM.HeaderId = vm.CurrentHeaderId;
+            MapVM.ViewModeIndex = 2;
+            await MatrixEmbed.EnsureSetupAsync(owner);
+            await AreaDataEmbed.EnsureSetupAsync(owner);
+            await ScriptsEmbed.EnsureSetupAsync(owner);
+            await LevelScriptsEmbed.EnsureSetupAsync(owner);
+            await TextEmbed.EnsureSetupAsync(owner);
+            EnsureEncountersEmbedded();
+            foreach (Control embed in new Control[] { EventsEmbed, MatrixEmbed, AreaDataEmbed, ScriptsEmbed, LevelScriptsEmbed, TextEmbed })
+                LockToHeader(embed);
+            if (!_followGuarded)
+            {
+                _followGuarded = true;
+                Follow(EventVM, nameof(EventEditorViewModel.SelectedEventIndex), () => EventVM.SelectedEventIndex, () => (int)vm.EventFileId,
+                       id => AvaloniaEditorLauncher.OpenEventEditor(id), RetargetEvents);
+                Follow(MatrixVM, nameof(MatrixEditorViewModel.SelectedMatrixIndex), () => MatrixVM.SelectedMatrixIndex, () => (int)vm.MatrixId,
+                       id => AvaloniaEditorLauncher.OpenMatrixEditor(id), RetargetMatrix);
+                Follow(AreaDataVM, nameof(AreaDataEditorViewModel.SelectedIndex), () => AreaDataVM.SelectedIndex, () => (int)vm.AreaDataId,
+                       id => AvaloniaEditorLauncher.OpenAreaDataEditor(id), RetargetAreaData);
+                Follow(ScriptsVM, nameof(ScriptEditorViewModel.SelectedScriptIndex), () => ScriptsVM.ShowingScriptFileId, () => (int)vm.ScriptFileId,
+                       id => AvaloniaEditorLauncher.OpenScriptEditor(id), RetargetScripts);
+                Follow(LevelScriptsVM, nameof(LevelScriptEditorViewModel.SelectedScriptIndex), () => LevelScriptsVM.SelectedScriptIndex, () => (int)vm.LevelScriptId,
+                       id => AvaloniaEditorLauncher.OpenLevelScriptEditor(id), RetargetLevelScripts);
+                Follow(TextVM, nameof(TextEditorViewModel.SelectedArchiveIndex), () => TextVM.SelectedArchiveIndex, () => (int)vm.TextArchiveId,
+                       id => AvaloniaEditorLauncher.OpenTextEditor(id), RetargetText);
+                // A search hit in another archive opens there, on its line, and this tab stays on the header's archive.
+                TextVM.OpenResultElsewhere = (archive, line) =>
+                {
+                    if (archive == (int)vm.TextArchiveId) return false;
+                    AvaloniaEditorLauncher.OpenTextEditorAt(archive, line);
+                    return true;
+                };
+            }
+        }
+
+        private bool _followGuarded;
+
+        /// <summary>
+        /// Keeps a tab on the header's own file. A jump inside the editor (a warp's go-to, next and previous, Add) that
+        /// lands on another file opens that file in the editor's own window and puts the tab back.
+        /// </summary>
+        private void Follow(System.ComponentModel.INotifyPropertyChanged tabVm, string property, System.Func<int> showing,
+                            System.Func<int> wanted, System.Action<int> openElsewhere, System.Action putBack)
+        {
+            tabVm.PropertyChanged += (_, e) =>
+            {
+                if (e.PropertyName != property || _settingUp || VM == null) return;
+                int now = showing(), want = wanted();
+                if (now < 0 || now == want) return;
+                global::Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                {
+                    if (showing() == wanted()) return;
+                    openElsewhere(now);
+                    putBack();
+                });
+            };
+        }
+
+        /// <summary>
+        /// The tab's file follows the header so another header's file can't be edited by mistake; Open in window picks
+        /// freely.
+        /// </summary>
+        private static void LockToHeader(Control embed)
+        {
+            if (embed?.FindControl<Control>("FilePicker") is not Control picker) return;
+            picker.IsEnabled = false;
+            ToolTip.SetTip(picker, "Follows the selected header. Open in window to pick another file.");
+            ToolTip.SetShowOnDisabled(picker, true);
+        }
+
+        private Control _encountersView;
+        private readonly TextBlock _noEncounters = new()
+        {
+            Text = "This header has no wild Pokémon.",
+            Margin = new global::Avalonia.Thickness(16),
+            Opacity = 0.75,
+        };
+
+        /// <summary>Shows the encounter editor, or a note when the header links no encounter file (255).</summary>
+        private void ShowEncountersFor(bool hasEncounters)
+        {
+            if (_encountersView == null) return;
+            object want = hasEncounters ? _encountersView : _noEncounters;
+            if (!ReferenceEquals(EncountersTab.Content, want)) EncountersTab.Content = want;
+        }
+
+        /// <summary>Tabs holding unsaved edits to a file other than the one header <paramref name="id"/> links.</summary>
+        private IEnumerable<(IEditorWithUnsavedChanges editor, string what)> TabsLeavingEdits(ushort id)
+        {
+            MapHeader h = DSPRE.ROMFiles.MapHeader.GetMapHeader(id);
+            if (h == null) yield break;
+            if (EventVM.HasUnsavedChanges && EventVM.SelectedEventIndex != h.EventFileID) yield return (EventVM, "event file");
+            if (MatrixVM.HasUnsavedChanges && MatrixVM.SelectedMatrixIndex != h.MatrixID) yield return (MatrixVM, "matrix");
+            if (AreaDataVM.HasUnsavedChanges && AreaDataVM.SelectedIndex != h.AreaDataID) yield return (AreaDataVM, "area");
+            if (ScriptsVM.HasUnsavedChanges && !ScriptsVM.IsShowingScriptFile(h.ScriptFileID)) yield return (ScriptsVM, "script");
+            if (LevelScriptsVM.HasUnsavedChanges && LevelScriptsVM.SelectedScriptIndex != h.LevelScriptID) yield return (LevelScriptsVM, "level script");
+            if (TextVM.HasUnsavedChanges && TextVM.SelectedArchiveIndex != h.TextArchiveID) yield return (TextVM, "text archive");
+            if (MapVM.HasUnsavedChanges && MapVM.HeaderId != id) yield return (MapVM, "map");
+            int wild = _encountersVm switch
+            {
+                WildEditorDPPtViewModel dppt => dppt.SelectedEncounterIndex,
+                WildEditorHGSSViewModel hgss => hgss.SelectedEncounterIndex,
+                _ => -1,
+            };
+            if (_encountersVm is IEditorWithUnsavedChanges enc && enc.HasUnsavedChanges && h.WildPokemon != (VM?.NoEncountersId ?? ushort.MaxValue) && wild != h.WildPokemon)
+                yield return (enc, "encounter file");
+        }
+
+        /// <summary>Point the embedded Event editor at the current header's event file (live if it's already loaded).</summary>
+        private void RetargetEvents()
+        {
+            HeaderEditorViewModel vm = VM; if (vm == null) return;
+            int id = (int)vm.EventFileId;
+            EventVM.InitialIndex = id;                 // used when the Events tab first sets up
+            if (EventVM.EventNames.Count > 0)          // already set up → retarget in place
+                EventVM.SelectedEventIndex = id;
+        }
+
+        private void RetargetMatrix()
+        {
+            HeaderEditorViewModel vm = VM; if (vm == null) return;
+            int id = (int)vm.MatrixId;
+            MatrixVM.InitialIndex = id;
+            if (MatrixVM.MatrixNames.Count > 0) MatrixVM.SelectedMatrixIndex = id;
+        }
+
+        private void RetargetAreaData()
+        {
+            HeaderEditorViewModel vm = VM; if (vm == null) return;
+            int id = (int)vm.AreaDataId;
+            AreaDataVM.InitialIndex = id;
+            if (AreaDataVM.AreaNames.Count > 0) AreaDataVM.SelectedIndex = id;
+        }
+
+        private void RetargetScripts()
+        {
+            HeaderEditorViewModel vm = VM; if (vm == null) return;
+            int id = (int)vm.ScriptFileId;
+            ScriptsVM.InitialIndex = id;
+            if (ScriptsVM.ScriptNames.Count > 0) ScriptsVM.SelectScriptFile(id);
+        }
+
+        private void RetargetLevelScripts()
+        {
+            HeaderEditorViewModel vm = VM; if (vm == null) return;
+            int id = (int)vm.LevelScriptId;
+            LevelScriptsVM.InitialIndex = id;
+            if (LevelScriptsVM.ScriptNames.Count > 0) LevelScriptsVM.SelectedScriptIndex = id;
+            EventVM.LevelScriptId = id;
+        }
+
+        private void RetargetText()
+        {
+            HeaderEditorViewModel vm = VM; if (vm == null) return;
+            int id = (int)vm.TextArchiveId;
+            TextVM.InitialIndex = id;
+            if (TextVM.ArchiveNames.Count > 0) TextVM.SelectedArchiveIndex = id;
+            EventVM.TextArchiveId = id;
+        }
+
+        /// <summary>
+        /// Builds the Encounters tab's editor afresh on every ROM load, since its data and view model type depend on
+        /// the ROM.
+        /// </summary>
+        private void EnsureEncountersEmbedded()
+        {
+            if (!AvaloniaEditorLauncher.IsRomLoaded) return;
+            // The last ROM's editor still listens for name and slot odds changes until it is detached.
+            switch (_encountersVm)
+            {
+                case WildEditorDPPtViewModel dppt: dppt.Detach(); break;
+                case WildEditorHGSSViewModel hgss: hgss.Detach(); break;
+            }
+            // hg-engine owns encounter data; editing it here would be overwritten on its next build.
+            EncountersTab.IsVisible = !RomInfo.IsHGE;
+            if (RomInfo.IsHGE)
+            {
+                EncountersTab.Content = null;
+                _encountersVm = null;
+                _encountersView = null;
+                _encountersEmbedded = true;
+                return;
+            }
+            try
+            {
+                DSUtils.TryUnpackNarcs(new List<DirNames> { DirNames.Encounters, DirNames.MonIcons });
+                string path = GameDirs[DirNames.Encounters].unpackedDir;
+                string[] names = GetPokemonNames();
+                int headerCount = GetHeaderCount();
+                int initial = VM != null && VM.CanOpenEncounters ? (int)VM.WildPokemon : -1;
+
+                if (GameFamily == GameFamilies.DP || GameFamily == GameFamilies.Plat)
+                {
+                    WildEditorDPPtViewModel evm = new WildEditorDPPtViewModel(path, names, initial, headerCount);
+                    _encountersVm = evm;
+                    _encountersView = new WildEditorDPPtView(evm);
+                    EncountersTab.Content = _encountersView;
+                    EditorTours.Attach(_encountersView, nameof(WildEditorDPPtView));
+                    OfferPopOut(_encountersView, "Encounters");
+                }
+                else
+                {
+                    WildEditorHGSSViewModel evm = new WildEditorHGSSViewModel(path, names, initial, headerCount);
+                    _encountersVm = evm;
+                    _encountersView = new WildEditorHGSSView(evm);
+                    EncountersTab.Content = _encountersView;
+                    EditorTours.Attach(_encountersView, nameof(WildEditorHGSSView));
+                    OfferPopOut(_encountersView, "Encounters");
+                }
+                _encountersEmbedded = true;
+                LockToHeader(_encountersView);
+                switch (_encountersVm)
+                {
+                    case WildEditorDPPtViewModel dppt:
+                        Follow(dppt, nameof(WildEditorDPPtViewModel.SelectedEncounterIndex), () => dppt.SelectedEncounterIndex,
+                               () => VM != null && VM.CanOpenEncounters ? (int)VM.WildPokemon : dppt.SelectedEncounterIndex,
+                               id => AvaloniaEditorLauncher.OpenWildEditor(id), RetargetEncounters);
+                        break;
+                    case WildEditorHGSSViewModel hgss:
+                        Follow(hgss, nameof(WildEditorHGSSViewModel.SelectedEncounterIndex), () => hgss.SelectedEncounterIndex,
+                               () => VM != null && VM.CanOpenEncounters ? (int)VM.WildPokemon : hgss.SelectedEncounterIndex,
+                               id => AvaloniaEditorLauncher.OpenWildEditor(id), RetargetEncounters);
+                        break;
+                }
+                ShowEncountersFor(VM != null && VM.CanOpenEncounters);
+            }
+            catch (System.Exception ex)
+            {
+                _encountersEmbedded = false;
+                _ = DialogHelper.ShowErrorAsync($"Couldn't set up the Wild Pokémon editor:\n{ex.Message}", "Wild Pokémon editor");
+            }
+        }
+
+        /// <summary>Points the Encounters tab at the current header's encounter table.</summary>
+        private void RetargetEncounters()
+        {
+            if (!_encountersEmbedded) { EnsureEncountersEmbedded(); return; }
+            HeaderEditorViewModel vm = VM;
+            ShowEncountersFor(vm != null && vm.CanOpenEncounters);
+            if (vm == null || !vm.CanOpenEncounters) return;
+            int id = (int)vm.WildPokemon;
+            switch (_encountersVm)
+            {
+                case WildEditorDPPtViewModel dppt: dppt.SelectedEncounterIndex = id; break;
+                case WildEditorHGSSViewModel hgss: hgss.SelectedEncounterIndex = id; break;
+            }
+        }
+
+        /// <summary>Opens the current tab's full editor, offering to save tab edits first since it reads from disk.</summary>
+        private async void PopOut(string tab)
+        {
+            HeaderEditorViewModel vm = VM;
+            if (vm == null || !AvaloniaEditorLauncher.IsRomLoaded) return;
+
+            IEditorWithUnsavedChanges editor = tab switch
+            {
+                "Header" => vm,
+                "Map" => MapVM,
+                "Events" => EventVM,
+                "Matrix" => MatrixVM,
+                "Area Data" => AreaDataVM,
+                "Encounters" => _encountersVm as IEditorWithUnsavedChanges,
+                "Scripts" => ScriptsVM,
+                "Level Scripts" => LevelScriptsVM,
+                "Text" => TextVM,
+                _ => null,
+            };
+            if (editor?.HasUnsavedChanges == true
+                && await DialogHelper.AskYesNoAsync("Save this tab's changes first? The window opens what is saved.", "Open in window"))
+            {
+                string failed = await UnsavedChangesDialog.TrySaveEditorAsync(editor);
+                if (failed != null) { await DialogHelper.ShowErrorAsync("The tab wasn't saved:\n" + failed, "Open in window"); return; }
+            }
+
+            switch (tab)
+            {
+                case "Header": AvaloniaEditorLauncher.OpenHeaderEditor(vm.CurrentHeaderId); break;
+                case "Map": AvaloniaEditorLauncher.OpenMapEditor(MapVM.FocusedMapIndex); break;
+                case "Events": AvaloniaEditorLauncher.OpenEventEditor(EventVM.SelectedEventIndex); break;
+                case "Matrix": AvaloniaEditorLauncher.OpenMatrixEditor(MatrixVM.SelectedMatrixIndex); break;
+                case "Area Data": AvaloniaEditorLauncher.OpenAreaDataEditor(AreaDataVM.SelectedIndex); break;
+                case "Encounters":
+                    int table = _encountersVm switch
+                    {
+                        WildEditorDPPtViewModel dppt => dppt.SelectedEncounterIndex,
+                        WildEditorHGSSViewModel hgss => hgss.SelectedEncounterIndex,
+                        _ => -1,
+                    };
+                    if (table >= 0) AvaloniaEditorLauncher.OpenWildEditor(table);
+                    break;
+                // Script lists can be ordered by source path, so the header's own file id is the reliable one.
+                case "Scripts": AvaloniaEditorLauncher.OpenScriptEditor((int)vm.ScriptFileId); break;
+                case "Level Scripts": AvaloniaEditorLauncher.OpenLevelScriptEditor(LevelScriptsVM.SelectedScriptIndex); break;
+                case "Text": AvaloniaEditorLauncher.OpenTextEditor(TextVM.SelectedArchiveIndex); break;
+            }
+        }
+
+        /// <summary>The tab whose automation name is <paramref name="name"/>, or null.</summary>
+        private TabItem TabNamed(string name)
+        {
+            foreach (object item in MapTabs.Items)
+                if (item is TabItem t && global::Avalonia.Automation.AutomationProperties.GetName(t) == name) return t;
+            return null;
+        }
+
+        /// <summary>Selects a tab by name. The header's Open buttons and the file chips land here.</summary>
+        private bool ShowTab(string name)
+        {
+            if (TabNamed(name) is not TabItem tab) return false;
+            MapTabs.SelectedItem = tab;
+            return true;
+        }
+
+        private void Chip_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is Control c && c.Tag is string name) ShowTab(name);
+        }
+
+        /// <summary>Builds a playable .nds, the same flow as the File menu's "Save ROM…", reachable
+        /// without leaving the Maps workspace.</summary>
+        private async void SaveRom_Click(object sender, RoutedEventArgs e)
+        {
+            if (TopLevel.GetTopLevel(this) is MainWindowView main) await main.SaveRomAsync();
+        }
+    }
+}

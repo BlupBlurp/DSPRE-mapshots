@@ -1,0 +1,372 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace DSPRE.ROMFiles
+{
+    /// <summary>What happened when the player was told to go somewhere.</summary>
+    public enum StepResult
+    {
+        Turned,      // wasn't facing that way, so it turned instead of moving
+        Walked,      // moved one tile
+        Jumped,
+        Blocked,     // faced that way already, but the tile ahead is closed off
+        BlockedByEvent,   // someone is standing there
+        Walking,     // still part way through the last step, so nothing new happened
+    }
+
+    /// <summary>The player walking a map in the preview. </summary>
+    public sealed class FieldPlayer
+    {
+        /// <summary>One tile of walking takes the same eight frames an overworld's does.</summary>
+        public const int WalkFrames = OverworldAnimator.WalkFrames;
+
+        private readonly MapCollisionGrid _collision;
+        private readonly Func<int, int, bool> _occupied;
+
+        // While a step is in progress: the tile it left, and how far through it is.
+        private int _fromX, _fromZ, _stepFramesLeft;
+
+        /// <summary>Whole-matrix tile the player is standing on.</summary>
+        public int TileX { get; private set; }
+        public int TileZ { get; private set; }
+        public MoveFacing Facing { get; private set; }
+
+        /// <summary>Where the player started, so the viewer can put them back.</summary>
+        public int StartX { get; }
+        public int StartZ { get; }
+        public MoveFacing StartFacing { get; }
+
+        /// <param name="occupied">Whether an event is standing on a tile. Null means nobody is.</param>
+        public FieldPlayer(int tileX, int tileZ, MoveFacing facing,
+                           MapCollisionGrid collision, Func<int, int, bool> occupied = null)
+        {
+            TileX = StartX = _fromX = tileX;
+            TileZ = StartZ = _fromZ = tileZ;
+            Facing = StartFacing = facing;
+            _cycle.Face(facing);
+            _collision = collision;
+            _occupied = occupied;
+        }
+
+        public void Reset()
+        {
+            TileX = _fromX = StartX;
+            TileZ = _fromZ = StartZ;
+            Facing = StartFacing;
+            _stepFramesLeft = 0;
+            _cycle.CopyFrom(new FieldWalkCycle());
+            _cycle.Face(StartFacing);
+        }
+
+        /// <summary>True while the player is part way between two tiles.</summary>
+        public bool IsWalking => _script != null ? _script.IsWalking : _stepFramesLeft > 0;
+
+        // A script's movement is played by the same code that plays an overworld's.
+        private OverworldAnimator _script;
+        private int _scriptX, _scriptZ;
+
+        /// <summary>True while a script is moving the player.</summary>
+        public bool IsScripted => _script != null;
+
+        /// <summary>Whether the player is on show. A movement can hide them.</summary>
+        public bool Visible => _script?.Visible ?? _visible;
+        private bool _visible = true;
+
+        /// <summary>How high off the ground the player is mid-hop, in tiles.</summary>
+        public float HopHeight
+        {
+            get
+            {
+                if (_script != null) return _script.HopHeight;
+                if (!_hopping || _stepFramesLeft <= 0 || _hopFrames <= 0) return 0f;
+
+                float through = 1f - _stepFramesLeft / (float)_hopFrames;
+                return (float)System.Math.Sin(through * System.Math.PI) * HopTiles;
+            }
+        }
+
+        private const float HopTiles = 0.6f;
+
+        private bool _hopping;
+        private int _hopFrames;
+
+        private int _stepFrames;
+
+        /// <summary>How many frames into an emote the player is, or -1.</summary>
+        public int EmoteFrame => _script?.EmoteFrame ?? -1;
+        public string EmoteName => _script?.EmoteName;
+
+        /// <summary>Plays a movement from a script, starting from wherever the player stands.</summary>
+        public void PlayScript(List<FieldMovementStep> steps)
+        {
+            if (steps == null || steps.Count == 0) return;
+            _stepFramesLeft = 0;
+            _fromX = TileX; _fromZ = TileZ;
+            _scriptX = TileX; _scriptZ = TileZ;
+            bool shown = Visible;
+            _script = new OverworldAnimator(null, Facing);
+            _script.Cycle.CopyFrom(_cycle);
+            _script.SetVisible(shown);
+            _script.PlayScript(steps);
+            FollowScript();
+        }
+
+        private void FollowScript()
+        {
+            if (_script == null) return;
+            Facing = _script.Facing;
+            TileX = _scriptX + _script.OffsetX;
+            TileZ = _scriptZ + _script.OffsetZ;
+            _fromX = _scriptX + _script.FromOffsetX;
+            _fromZ = _scriptZ + _script.FromOffsetZ;
+            if (_script.IsScripted) return;
+            _cycle.CopyFrom(_script.Cycle);
+            _visible = _script.Visible;
+            _fromX = TileX; _fromZ = TileZ;
+            _script = null;
+        }
+
+        /// <summary>
+        /// The tile being left, which is the same as <see cref="TileX"/> unless a step is running.
+        /// </summary>
+        public int FromX => _fromX;
+        public int FromZ => _fromZ;
+
+        /// <summary>The clock the player's pictures run on.</summary>
+        public FieldWalkCycle Cycle => _script?.Cycle ?? _cycle;
+        private readonly FieldWalkCycle _cycle = new FieldWalkCycle();
+
+        /// <summary>Where to draw the player, which is between tiles while a step is running.</summary>
+        public float DrawX => _script != null ? _scriptX + _script.DrawOffsetX : Blend(_fromX, TileX);
+        public float DrawZ => _script != null ? _scriptZ + _script.DrawOffsetZ : Blend(_fromZ, TileZ);
+
+        private float Blend(int from, int to)
+        {
+            if (_stepFramesLeft <= 0) return to;
+            int whole = _stepFrames > 0 ? _stepFrames : WalkFrames;
+            float gone = (whole - _stepFramesLeft) / (float)whole;
+            return from + (to - from) * gone;
+        }
+
+        /// <summary>Moves the walk along. Call once per rendered frame with how many frames have passed.</summary>
+        public void Advance(int frames)
+        {
+            if (_script != null && frames > 0) { _script.Advance(frames); FollowScript(); return; }
+            for (int i = 0; i < frames; i++)
+            {
+                _cycle.Tick();
+                if (_stepFramesLeft <= 0) { _cycle.Rest(); continue; }
+                _cycle.Walk(WalkFrames);
+                if (--_stepFramesLeft == 0) { _fromX = TileX; _fromZ = TileZ; _hopping = false; }
+            }
+        }
+
+        public static (int dx, int dz) Step(MoveFacing f)
+        {
+            switch (f)
+            {
+                case MoveFacing.Up: return (0, -1);
+                case MoveFacing.Down: return (0, 1);
+                case MoveFacing.Left: return (-1, 0);
+                default: return (1, 0);
+            }
+        }
+
+        /// <summary>The tile the player faces, which an interaction reaches.</summary>
+        public (int x, int z) TileAhead
+        {
+            get { (int dx, int dz) = Step(Facing); return (TileX + dx, TileZ + dz); }
+        }
+
+        /// <summary>Presses a direction. </summary>
+        public StepResult Go(MoveFacing dir)
+        {
+            // A step already running has to finish before another can start.
+            if (_stepFramesLeft > 0 || _script != null) return StepResult.Walking;
+
+            if (Facing != dir) { Facing = dir; _cycle.Face(dir); return StepResult.Turned; }
+
+            (int dx, int dz) = Step(dir);
+            int nx = TileX + dx, nz = TileZ + dz;
+
+            if (_collision != null && !_collision.IsEmpty
+                && FieldTileBehaviors.JumpsWith(_collision.TypeAt(nx, nz), dx, dz)
+                && FieldTileBehaviors.TryJump(_collision.TypeAt(nx, nz), out _, out _, out int over))
+            {
+                int jx = TileX + dx * (over + 1), jz = TileZ + dz * (over + 1);
+                if (!_collision.IsBlocked(jx, jz) && (_occupied == null || !_occupied(jx, jz)))
+                {
+                    _fromX = TileX; _fromZ = TileZ;
+                    TileX = jx; TileZ = jz;
+                    _stepFramesLeft = WalkFrames * (over + 1);
+                    _stepFrames = _stepFramesLeft;
+                    _hopFrames = _stepFramesLeft;
+                    _hopping = true;
+                    return StepResult.Jumped;
+                }
+            }
+
+            if (_collision != null && !_collision.IsEmpty && _collision.IsBlocked(nx, nz))
+                return StepResult.Blocked;
+            if (_occupied != null && _occupied(nx, nz))
+                return StepResult.BlockedByEvent;
+
+            _fromX = TileX; _fromZ = TileZ;
+            TileX = nx; TileZ = nz;
+            _stepFramesLeft = _stepFrames = WalkFrames;
+            _hopping = false;
+            return StepResult.Walked;
+        }
+
+        public void PlaceAt(int tileX, int tileZ, MoveFacing facing)
+        {
+            _script = null;
+            _stepFramesLeft = 0;
+            _hopping = false;
+            TileX = _fromX = tileX;
+            TileZ = _fromZ = tileZ;
+            Facing = facing;
+            _cycle.Face(facing);
+        }
+
+        /// <summary>Turns without trying to move, for looking at something next to you.</summary>
+        public void Face(MoveFacing dir) { Facing = dir; _cycle.Face(dir); }
+    }
+
+    public enum SpawnableKind { Normal = 0, Signboard = 1, HiddenItem = 2 }
+
+    /// <summary>
+    /// Which way you have to be standing to talk to a spawnable, as the games number it: the direction you
+    /// approach it FROM.
+    /// </summary>
+    public enum SpawnableApproach
+    {
+        FromBelow = 0, FromLeft = 1, FromRight = 2, FromAbove = 3,
+        AnyWay = 4, FromTheSides = 5, FromAboveOrBelow = 6,
+    }
+
+    /// <summary>A trainer's number is a script id like any other event's. </summary>
+    public static class TrainerScripts
+    {
+        public const int SingleFirst = 3000;
+        public const int SingleLast = 4999;
+        public const int DoubleFirst = 5000;
+        public const int DoubleLast = 6999;
+
+        /// <summary>True when a script id starts a trainer battle.</summary>
+        public static bool IsTrainerScript(int scriptId) =>
+            (scriptId >= SingleFirst && scriptId <= SingleLast) ||
+            (scriptId >= DoubleFirst && scriptId <= DoubleLast);
+
+        /// <summary>Whether the script id is in the double battle range.</summary>
+        public static bool IsDouble(int scriptId) => scriptId >= DoubleFirst && scriptId <= DoubleLast;
+
+        /// <summary>The trainer a script id stands for, or null when it isn't a trainer script at all.</summary>
+        public static int? TrainerIdFor(int scriptId)
+        {
+            if (!IsTrainerScript(scriptId)) return null;
+            return scriptId - (IsDouble(scriptId) ? DoubleFirst : SingleFirst) + 1;
+        }
+    }
+
+    /// <summary>
+    /// Finding what the player is interacting with, following the games' own checks: an overworld or a
+    /// spawnable on the tile in front, a trigger under the player's feet, and a warp on the tile they
+    /// stepped onto.
+    /// </summary>
+    public static class FieldInteraction
+    {
+        /// <summary>The whole-matrix tile an event was placed on.</summary>
+        public static int TileX(Event e) => e.XMatrixPosition * MapFile.MapSize + e.XMapPosition;
+        public static int TileZ(Event e) => e.YMatrixPosition * MapFile.MapSize + e.YMapPosition;
+
+        /// <summary>Whether an overworld is on the map at all. </summary>
+        public static bool IsPresent(Overworld o, Func<ushort, bool> flagIsSet) =>
+            o != null && (flagIsSet == null || !flagIsSet(o.Flag));
+
+        /// <summary>The overworld standing on a tile, or null.</summary>
+        public static Overworld OverworldAt(EventFile events, int tileX, int tileZ,
+                                            Func<ushort, bool> flagIsSet = null) =>
+            events?.Overworlds?.FirstOrDefault(
+                o => TileX(o) == tileX && TileZ(o) == tileZ && IsPresent(o, flagIsSet));
+
+        /// <summary>Every tile an overworld occupies, for the player to bump into.</summary>
+        public static HashSet<(int x, int z)> OccupiedTiles(EventFile events, Func<ushort, bool> flagIsSet = null)
+        {
+            HashSet<(int, int)> set = new HashSet<(int, int)>();
+            if (events?.Overworlds == null) return set;
+            foreach (Overworld o in events.Overworlds)
+                if (IsPresent(o, flagIsSet)) set.Add((TileX(o), TileZ(o)));
+            return set;
+        }
+
+        /// <summary>The tile a talk reaches. </summary>
+        public static (int x, int z) TalkTile(FieldPlayer player, MapCollisionGrid map)
+        {
+            (int x, int z) = player.TileAhead;
+            if (map != null && map.IsCounter(x, z))
+            {
+                (int dx, int dz) = FieldPlayer.Step(player.Facing);
+                return (x + dx, z + dz);
+            }
+            return (x, z);
+        }
+
+        /// <summary>The spawnable on a tile that answers to someone facing this way, or null. </summary>
+        public static Spawnable SpawnableAt(EventFile events, int tileX, int tileZ,
+                                            MoveFacing playerFacing, Func<Spawnable, bool> hiddenStillThere = null)
+        {
+            if (events?.Spawnables == null) return null;
+            foreach (Spawnable s in events.Spawnables)
+            {
+                if (TileX(s) != tileX || TileZ(s) != tileZ) continue;
+
+                if ((SpawnableKind)s.Type == SpawnableKind.HiddenItem)
+                {
+                    if (hiddenStillThere == null || hiddenStillThere(s)) return s;
+                    continue;
+                }
+                if (CanTalkFrom(s.Dir, playerFacing)) return s;
+            }
+            return null;
+        }
+
+        /// <summary>Whether a spawnable answers someone facing this way.</summary>
+        public static bool CanTalkFrom(int spawnableDir, MoveFacing playerFacing)
+        {
+            SpawnableApproach approach = (SpawnableApproach)spawnableDir;
+            if (approach == SpawnableApproach.AnyWay) return true;
+            switch (playerFacing)
+            {
+                case MoveFacing.Up:
+                    return approach == SpawnableApproach.FromBelow || approach == SpawnableApproach.FromAboveOrBelow;
+                case MoveFacing.Down:
+                    return approach == SpawnableApproach.FromAbove || approach == SpawnableApproach.FromAboveOrBelow;
+                case MoveFacing.Left:
+                    return approach == SpawnableApproach.FromRight || approach == SpawnableApproach.FromTheSides;
+                default:
+                    return approach == SpawnableApproach.FromLeft || approach == SpawnableApproach.FromTheSides;
+            }
+        }
+
+        /// <summary>The trigger the player is standing in, or null. </summary>
+        public static Trigger TriggerAt(EventFile events, int tileX, int tileZ, Func<ushort, int> variableValue)
+        {
+            if (events?.Triggers == null) return null;
+            foreach (Trigger t in events.Triggers)
+            {
+                int x = TileX(t), z = TileZ(t);
+                if (tileX < x || tileX >= x + Math.Max(1, (int)t.WidthX)) continue;
+                if (tileZ < z || tileZ >= z + Math.Max(1, (int)t.HeightY)) continue;
+                if (variableValue != null && variableValue(t.VariableWatched) != t.ExpectedVarValue) continue;
+                return t;
+            }
+            return null;
+        }
+
+        /// <summary>The warp on a tile, or null.</summary>
+        public static Warp WarpAt(EventFile events, int tileX, int tileZ) =>
+            events?.Warps?.FirstOrDefault(w => TileX(w) == tileX && TileZ(w) == tileZ);
+    }
+}

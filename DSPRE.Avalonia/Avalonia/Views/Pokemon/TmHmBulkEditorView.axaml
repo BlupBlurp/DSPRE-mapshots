@@ -1,0 +1,81 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="clr-namespace:DSPRE.Avalonia.Controls"
+        xmlns:vm="clr-namespace:DSPRE.Avalonia.ViewModels.Pokemon"
+        xmlns:models="clr-namespace:DSPRE.Avalonia.Models"
+        x:Class="DSPRE.Avalonia.Views.Pokemon.TmHmBulkEditorView"
+        x:DataType="vm:TmHmBulkEditorViewModel">
+
+  <DockPanel>
+    <Border DockPanel.Dock="Bottom" Background="{DynamicResource Editor.StatusBg}" BorderBrush="{DynamicResource Editor.Border}"
+            BorderThickness="0,1,0,0" Padding="8,3">
+      <TextBlock Text="{Binding StatusText}" FontSize="11" Foreground="{DynamicResource Editor.Subtle}" VerticalAlignment="Center"/>
+    </Border>
+
+    <controls:EditorToolbar>
+        <ToggleButton x:Name="ByPokemonButton" Content="By Pokémon" IsChecked="{Binding IsByPokemonMode, Mode=OneWay}" Click="ByPokemonMode_Click" Margin="0,0,6,4"/>
+        <ToggleButton Content="By TM/HM" IsChecked="{Binding IsByMachineMode, Mode=OneWay}" Click="ByMachineMode_Click" Margin="0,0,12,4"/>
+
+        <TextBlock Text="Machine" VerticalAlignment="Center" Margin="0,0,6,4" IsVisible="{Binding IsByMachineMode}"/>
+        <controls:FusionAutoCompleteBox ItemsSource="{Binding MachineNamesList}" SelectedIndex="{Binding CurrentMachineIndex}"
+                  Width="220" Margin="0,0,12,4" IsVisible="{Binding IsByMachineMode}"/>
+
+        <Button Content="Save all" controls:Icon.Key="saveButton" Click="SaveAll_Click" IsEnabled="{Binding HasUnsavedChanges}" Margin="0,0,6,4"/>
+        <Button Content="Discard" controls:Icon.Key="resetIcon" Click="Discard_Click" IsEnabled="{Binding HasUnsavedChanges}" Margin="0,0,12,4"/>
+        <controls:UndoRedoButtons/>
+
+        <Button Content="{Binding SelectAllLabel}" Click="SelectAll_Click" Margin="0,0,6,4"/>
+        <Button Content="{Binding SelectNoneLabel}" Click="SelectNone_Click" Margin="0,0,12,4"/>
+
+        <Button x:Name="SyncUnionButton" Content="Share across family" Click="SyncUnion_Click" IsEnabled="{Binding IsByPokemonMode}" Margin="0,0,6,4"
+                ToolTip.Tip="Gives every family member each machine any of them can learn (union)"/>
+        <Button Content="Keep shared only" Click="SyncIntersect_Click" IsEnabled="{Binding IsByPokemonMode}" Margin="0,0,12,4"
+                ToolTip.Tip="Keeps only the machines every family member shares (intersection)"/>
+        <Button Content="Copy compatibility to…" controls:Icon.Key="copy" Click="CopyTo_Click" IsEnabled="{Binding IsByPokemonMode}" Margin="0,0,12,4"/>
+        <Button Content="Clear all" Click="ClearAll_Click" Margin="0,0,12,4" ToolTip.Tip="Untick every Pokémon's TMs and HMs"/>
+
+        <TextBox x:Name="FilterBox" Text="{Binding FilterText}" Width="180" PlaceholderText="Search Pokémon" Margin="0,0,0,4"/>
+    </controls:EditorToolbar>
+
+    <Grid ColumnDefinitions="360,*">
+      <TreeView x:Name="SpeciesTree" Grid.Column="0" Margin="4" ItemsSource="{Binding Tree}"
+                ToolTip.Tip="Tick a Pokémon to let it learn the machine">
+        <TreeView.DataTemplates>
+          <TreeDataTemplate DataType="models:SpeciesGroupNode" ItemsSource="{Binding Children}">
+            <CheckBox Content="{Binding DisplayName}" IsChecked="{Binding IsChecked}"/>
+          </TreeDataTemplate>
+          <DataTemplate DataType="models:SpeciesLeafNode">
+            <CheckBox Content="{Binding DisplayName}" IsChecked="{Binding IsChecked}"/>
+          </DataTemplate>
+        </TreeView.DataTemplates>
+      </TreeView>
+
+      <Grid x:Name="MachinePanel" Grid.Column="1">
+        <DockPanel IsVisible="{Binding IsByPokemonMode}">
+          <Grid DockPanel.Dock="Top" ColumnDefinitions="74,240,Auto" Margin="16,8,0,0" TextElement.FontSize="11" TextElement.Foreground="{DynamicResource Editor.Subtle}">
+            <Grid Grid.Column="2" ColumnDefinitions="40,44,28" Margin="6,0,0,0">
+              <TextBlock Text="Power" HorizontalAlignment="Right"/>
+              <TextBlock Grid.Column="1" Text="Acc." HorizontalAlignment="Right"/>
+              <TextBlock Grid.Column="2" Text="PP" HorizontalAlignment="Right"/>
+            </Grid>
+          </Grid>
+          <ScrollViewer>
+            <ItemsControl Margin="16,4,16,16" ItemsSource="{Binding MachineChecklist}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate DataType="models:FlagChecklistItem">
+                  <Grid ColumnDefinitions="74,240,Auto" Margin="0,2">
+                    <controls:MoveBadges Move="{Binding Move}" HorizontalAlignment="Left"/>
+                    <CheckBox Grid.Column="1" Content="{Binding Name}" IsThreeState="True" IsChecked="{Binding IsChecked, Mode=OneWay}"
+                              Click="MachineCheckBox_Click"/>
+                    <controls:MoveBadges Grid.Column="2" Move="{Binding Move}" ShowIcons="False" ShowStats="True"/>
+                  </Grid>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </ScrollViewer>
+        </DockPanel>
+
+      </Grid>
+    </Grid>
+  </DockPanel>
+</UserControl>

@@ -1,0 +1,148 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Text;
+using YamlDotNet.Serialization;
+
+namespace DSPRE
+{
+    public static class YamlUtils
+    {
+        private const string LegacyPaddingFields =
+            "file_image_padding_value: 255\n" +
+            "section_padding_value: 255\n";
+
+        private const string PaddingBlock =
+            "padding:\n" +
+            "  arm9: 0\n" +
+            "  arm9_overlay_table: 255\n" +
+            "  arm9_overlays: 255\n" +
+            "  arm7: 255\n" +
+            "  arm7_overlay_table: 255\n" +
+            "  arm7_overlays: 255\n" +
+            "  fnt: 255\n" +
+            "  fat: 255\n" +
+            "  banner: 255\n" +
+            "  file_image: 255\n" +
+            "  rom: 255\n";
+
+        /// <summary>
+        /// Writes the padding fields of every ds-rom version DSPRE ships, so a project built by one
+        /// version still builds in the other. Unknown fields are ignored by both.
+        /// </summary>
+        /// <param name="configPath">Path to the project's config.yaml.</param>
+        public static void EnsureConfigPaddingFields(string configPath)
+        {
+            try
+            {
+                if (!File.Exists(configPath))
+                {
+                    return;
+                }
+
+                string text = File.ReadAllText(configPath);
+                bool hasLegacy = false;
+                bool hasBlock = false;
+                foreach (string line in text.Split('\n'))
+                {
+                    if (line.StartsWith("file_image_padding_value:") || line.StartsWith("section_padding_value:"))
+                    {
+                        hasLegacy = true;
+                    }
+                    else if (line.StartsWith("padding:"))
+                    {
+                        hasBlock = true;
+                    }
+                }
+
+                if (hasLegacy && hasBlock)
+                {
+                    return;
+                }
+
+                StringBuilder sb = new StringBuilder(text);
+                if (text.Length > 0 && !text.EndsWith("\n"))
+                {
+                    sb.Append('\n');
+                }
+                if (!hasLegacy)
+                {
+                    sb.Append(LegacyPaddingFields);
+                }
+                if (!hasBlock)
+                {
+                    sb.Append(PaddingBlock);
+                }
+
+                PlainFiles.WriteText(configPath, sb.ToString());
+                AppLogger.Info("Added the missing ds-rom padding fields to " + configPath);
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Error("Couldn't update the padding fields in config.yaml: " + ex.Message);
+            }
+        }
+
+        private class HeaderYaml
+        {
+            [YamlMember(Alias = "title")]
+            public string Title { get; set; }
+            [YamlMember(Alias = "gamecode")]
+            public string Gamecode { get; set; }
+            [YamlMember(Alias = "makercode")]
+            public string Makercode { get; set; }
+            [YamlMember(Alias = "rom_version")]
+            public int RomVersion { get; set; }
+        }
+
+        /// <summary>
+        /// Reads gamecode and rom_version from a ds-rom header.yaml file.
+        /// </summary>
+        /// <param name="yamlPath">Path to header.yaml file</param>
+        /// <returns>Tuple of (gamecode, revision) or null if parsing fails</returns>
+        public static (string gamecode, byte revision)? ReadGameCodeFromHeaderYaml(string yamlPath)
+        {
+            try
+            {
+                if (!File.Exists(yamlPath))
+                {
+                    AppLogger.Warn($"Header YAML file doesn't exist at path: {yamlPath}");
+                    return null;
+                }
+
+                AppLogger.Debug($"Reading header.yaml from: {yamlPath}");
+                string yamlContent = File.ReadAllText(yamlPath);
+                AppLogger.Debug($"YAML content length: {yamlContent.Length} bytes");
+
+                IDeserializer deserializer = new DeserializerBuilder()
+                    .IgnoreUnmatchedProperties()
+                    .Build();
+                HeaderYaml header = deserializer.Deserialize<HeaderYaml>(yamlContent);
+
+                if (header == null)
+                {
+                    AppLogger.Warn("Deserialized header object is null");
+                    return null;
+                }
+
+                AppLogger.Debug($"Parsed YAML - gamecode: '{header.Gamecode}', rom_version: {header.RomVersion}");
+
+                if (string.IsNullOrEmpty(header.Gamecode))
+                {
+                    AppLogger.Warn("gamecode field is null or empty in header.yaml");
+                    return null;
+                }
+
+                byte revision = (byte)header.RomVersion;
+                AppLogger.Info($"Successfully read header.yaml: gamecode={header.Gamecode}, revision={revision}");
+                return (header.Gamecode, revision);
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Error($"Exception while parsing header.yaml: {ex.Message}");
+                AppLogger.Error($"Stack trace: {ex.StackTrace}");
+                return null;
+            }
+        }
+    }
+}

@@ -1,0 +1,119 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="clr-namespace:DSPRE.Avalonia.Controls"
+             xmlns:vm="clr-namespace:DSPRE.Avalonia.ViewModels.Pokemon"
+             x:Class="DSPRE.Avalonia.Views.Pokemon.SafariZoneGroupView"
+             x:DataType="vm:SafariZoneGroupViewModel">
+
+  <UserControl.Resources>
+    <DataTemplate x:Key="EncounterCell" x:DataType="vm:SafariZoneGroupViewModel+EncounterCell">
+      <Grid ColumnDefinitions="36,170,64,Auto" IsVisible="{Binding Exists}" Margin="0,0,12,0">
+        <Image Width="32" Height="32" Source="{Binding Species, Converter={x:Static controls:GameIconConverter.Pokemon}}"/>
+        <controls:FusionAutoCompleteBox Grid.Column="1" controls:EditorLink.To="Pokemon" Margin="0,0,4,0"
+                                        ItemsSource="{Binding SpeciesNames}" SelectedIndex="{Binding SpeciesIndex}"/>
+        <NumericUpDown Grid.Column="2" Minimum="0" Maximum="100" Increment="1" FormatString="0" Value="{Binding Level}"/>
+        <NumericUpDown Grid.Column="3" Width="56" Margin="4,0,0,0" Minimum="0" Maximum="31" Increment="1" FormatString="0"
+                       Value="{Binding Form}" IsVisible="{Binding ShowForms}"/>
+      </Grid>
+    </DataTemplate>
+  </UserControl.Resources>
+
+  <Grid RowDefinitions="*,Auto,*" Margin="4">
+
+    <GroupBox Grid.Row="0" Header="Normal encounters">
+      <DockPanel>
+        <Grid DockPanel.Dock="Top" ColumnDefinitions="28,Auto,Auto,Auto" Margin="4,0,0,2" TextElement.FontWeight="SemiBold">
+          <TextBlock Text="Slot"/>
+          <Grid Grid.Column="1" ColumnDefinitions="36,170,64,Auto" Margin="0,0,12,0">
+            <TextBlock Grid.Column="1" Text="Morning"/>
+            <TextBlock Grid.Column="2" Text="Level"/>
+            <TextBlock Grid.Column="3" Width="56" Margin="4,0,0,0" Text="Form" IsVisible="{Binding ShowForms}"/>
+          </Grid>
+          <Grid Grid.Column="2" ColumnDefinitions="36,170,64,Auto" Margin="0,0,12,0">
+            <TextBlock Grid.Column="1" Text="Day"/>
+            <TextBlock Grid.Column="2" Text="Level"/>
+            <TextBlock Grid.Column="3" Width="56" Margin="4,0,0,0" Text="Form" IsVisible="{Binding ShowForms}"/>
+          </Grid>
+          <Grid Grid.Column="3" ColumnDefinitions="36,170,64,Auto" Margin="0,0,12,0">
+            <TextBlock Grid.Column="1" Text="Night"/>
+            <TextBlock Grid.Column="2" Text="Level"/>
+            <TextBlock Grid.Column="3" Width="56" Margin="4,0,0,0" Text="Form" IsVisible="{Binding ShowForms}"/>
+          </Grid>
+        </Grid>
+        <ScrollViewer HorizontalScrollBarVisibility="Auto">
+          <ItemsControl ItemsSource="{Binding NormalRows}" Margin="4,0,0,0">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="vm:SafariZoneGroupViewModel+SlotRow">
+                <Grid ColumnDefinitions="28,Auto,Auto,Auto" Margin="0,1">
+                  <TextBlock Text="{Binding Label}" VerticalAlignment="Center"/>
+                  <ContentControl Grid.Column="1" Content="{Binding Morning}" ContentTemplate="{StaticResource EncounterCell}"/>
+                  <ContentControl Grid.Column="2" Content="{Binding Day}" ContentTemplate="{StaticResource EncounterCell}"/>
+                  <ContentControl Grid.Column="3" Content="{Binding Night}" ContentTemplate="{StaticResource EncounterCell}"/>
+                </Grid>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </ScrollViewer>
+      </DockPanel>
+    </GroupBox>
+
+    <GridSplitter Grid.Row="1" Height="6" ResizeDirection="Rows" Background="Transparent"/>
+
+    <GroupBox Grid.Row="2" Header="Bonus encounters">
+      <DockPanel>
+        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="6" Margin="0,0,0,4">
+          <Button Content="Add" controls:Icon.Key="addIcon" Click="AddObject_Click" IsEnabled="{Binding CanEditObjectSlotCount}"/>
+          <Button Content="Remove last" controls:Icon.Key="deleteIcon" Click="RemoveObject_Click" IsEnabled="{Binding CanEditObjectSlotCount}"/>
+          <TextBlock Text="!" FontWeight="Bold" VerticalAlignment="Center" Foreground="{DynamicResource Editor.Warn}"
+                     IsVisible="{Binding NoSlotsWarning}" ToolTip.Tip="No bonus slots: surfing and every rod here give level 5 Magikarp"/>
+        </StackPanel>
+        <Grid DockPanel.Dock="Top" ColumnDefinitions="28,Auto,Auto,Auto" Margin="4,0,0,2" TextElement.FontWeight="SemiBold">
+          <TextBlock Text="Slot"/>
+          <Grid Grid.Column="1" ColumnDefinitions="36,170,64,Auto" Margin="0,0,12,0">
+            <TextBlock Grid.Column="1" Text="Morning"/>
+            <TextBlock Grid.Column="2" Text="Level"/>
+            <TextBlock Grid.Column="3" Width="56" Margin="4,0,0,0" Text="Form" IsVisible="{Binding ShowForms}"/>
+          </Grid>
+          <Grid Grid.Column="2" ColumnDefinitions="36,170,64,Auto" Margin="0,0,12,0">
+            <TextBlock Grid.Column="1" Text="Day"/>
+            <TextBlock Grid.Column="2" Text="Level"/>
+            <TextBlock Grid.Column="3" Width="56" Margin="4,0,0,0" Text="Form" IsVisible="{Binding ShowForms}"/>
+          </Grid>
+          <Grid Grid.Column="3" ColumnDefinitions="36,170,64,Auto" Margin="0,0,12,0">
+            <TextBlock Grid.Column="1" Text="Night"/>
+            <TextBlock Grid.Column="2" Text="Level"/>
+            <TextBlock Grid.Column="3" Width="56" Margin="4,0,0,0" Text="Form" IsVisible="{Binding ShowForms}"/>
+          </Grid>
+        </Grid>
+        <ScrollViewer HorizontalScrollBarVisibility="Auto">
+          <ItemsControl ItemsSource="{Binding ObjectRows}" Margin="4,0,0,0">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="vm:SafariZoneGroupViewModel+ObjectRow">
+                <StackPanel Margin="0,1,0,8">
+                  <Grid ColumnDefinitions="28,Auto,Auto,Auto">
+                    <TextBlock Text="{Binding Label}" VerticalAlignment="Center"/>
+                    <ContentControl Grid.Column="1" Content="{Binding Morning}" ContentTemplate="{StaticResource EncounterCell}"/>
+                    <ContentControl Grid.Column="2" Content="{Binding Day}" ContentTemplate="{StaticResource EncounterCell}"/>
+                    <ContentControl Grid.Column="3" Content="{Binding Night}" ContentTemplate="{StaticResource EncounterCell}"/>
+                  </Grid>
+                  <StackPanel Orientation="Horizontal" Spacing="6" Margin="64,3,0,0">
+                    <TextBlock Text="Needs" VerticalAlignment="Center"/>
+                    <ComboBox Width="150" ItemsSource="{Binding ObjectTypeNames}" SelectedIndex="{Binding ReqType}"/>
+                    <NumericUpDown Width="64" Minimum="0" Maximum="255" Increment="1" FormatString="0" Value="{Binding ReqPoints}"/>
+                    <TextBlock Text="points" VerticalAlignment="Center"/>
+                    <TextBlock Text="!" FontWeight="Bold" VerticalAlignment="Center" Foreground="{DynamicResource Editor.Warn}"
+                               IsVisible="{Binding RequirementTypeWarning}" ToolTip.Tip="Type 0 doesn't work in game"/>
+                    <TextBlock Text="and" VerticalAlignment="Center" Margin="10,0,0,0"/>
+                    <ComboBox Width="150" ItemsSource="{Binding ObjectTypeNames}" SelectedIndex="{Binding OptReqType}"/>
+                    <NumericUpDown Width="64" Minimum="0" Maximum="255" Increment="1" FormatString="0" Value="{Binding OptReqPoints}"/>
+                    <TextBlock Text="points" VerticalAlignment="Center"/>
+                  </StackPanel>
+                </StackPanel>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </ScrollViewer>
+      </DockPanel>
+    </GroupBox>
+  </Grid>
+</UserControl>

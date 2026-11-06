@@ -1,0 +1,375 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Text;
+using System.Text.RegularExpressions;
+using System.Threading.Tasks;
+
+namespace DSPRE.ROMFiles
+{
+    /// <summary>
+    /// Finds the starter's GivePokemon in the script sources: the one reading the variable GetPlayerStarterSpecies just
+    /// wrote. Edits save and compile as the Script editor does.
+    /// </summary>
+    public static class StarterRotomSource
+    {
+        /// <summary>One give command in the sources, with enough to show it and to change it.</summary>
+        public sealed class Match
+        {
+            public int FileId;
+            public int LineNumber;          // 1-based, as an editor shows it
+            public string Line;             // the GivePokemon line, as written
+            public string SpeciesArgument;  // VAR_0x8000, SPECIES_EEVEE, ...
+            public int Level;
+            public string HeldItemArgument; // ITEM_NONE, ITEM_ORAN_BERRY, ...
+            public bool NamedAsStarter;     // preceded by GetPlayerStarterSpecies on the same variable
+            public string Container;        // the "script script_13" it sits inside, blank if none
+            public int IndexInContainer;    // which give command it is within that script, from 0
+            public int ContainerNumber = -1; // the "#13" on that script, which is how RomInfo names it
+
+            /// <summary>True when the species comes from a variable, which is how a starter arrives.</summary>
+            public bool SpeciesFromVariable => LooksLikeVariable(SpeciesArgument);
+
+            public string Where => string.IsNullOrEmpty(Container)
+                ? $"script file {FileId}, line {LineNumber}"
+                : $"script file {FileId}, {Container}, line {LineNumber}";
+            public string Summary => NamedAsStarter
+                ? $"the starter's, species from {SpeciesArgument}, level {Level}"
+                : $"species {SpeciesArgument}, level {Level}";
+            // Keyed by its place in the script, not its line, so edits above it keep the choice.
+            public string Key => $"rotom:{FileId}:{Container}:{IndexInContainer}";
+        }
+
+        public static bool IsAvailable =>
+            RomInfo.HasRotomProject && Directory.Exists(SourceDir());
+
+        private static string SourceDir() =>
+            string.IsNullOrEmpty(RomInfo.WorkDir)
+                ? null : Path.Combine(RomInfo.DspreDir, "expanded", "scripts");
+
+        public static string PathFor(int fileId) =>
+            Path.Combine(SourceDir() ?? "", fileId.ToString("D4") + ".rotom");
+
+        // GivePokemon <species>, <level>, <item>, <result>
+        private static readonly Regex Give = new Regex(
+            @"^\s*GivePokemon\s+([^,]+?)\s*,\s*([^,]+?)\s*,\s*([^,]+?)\s*,",
+            RegexOptions.Compiled);
+
+        // script script_13 #13:  /  action action_4 #4:
+        private static readonly Regex Container = new Regex(
+            @"^\s*(?:script|function|action)\s+(\S+?)\s*(?:#(\d+))?\s*:", RegexOptions.Compiled);
+
+        private static readonly Regex Starter = new Regex(
+            @"^\s*GetPlayerStarterSpecies\s+(\S+)\s*$", RegexOptions.Compiled);
+
+        /// <summary>Every give command in the sources, the starter first. Reading the text is quicker than parsing the binaries.</summary>
+        public static List<Match> FindAll()
+        {
+            List<Match> found = new List<Match>();
+            string dir = SourceDir();
+            if (dir == null || !Directory.Exists(dir)) return found;
+
+            foreach (string path in Directory.GetFiles(dir, "*.rotom"))
+                if (int.TryParse(Path.GetFileNameWithoutExtension(path), out int fileId))
+                    found.AddRange(ReadFile(fileId));
+
+            return found.OrderByDescending(f => f.NamedAsStarter).ThenBy(f => f.FileId).ToList();
+        }
+
+        /// <summary>How many sources have been read, so a test can see the one-file shortcut is taken.</summary>
+        public static int FilesRead { get; private set; }
+        public static void ForgetFilesRead() => FilesRead = 0;
+
+        /// <summary>The give commands in one script source; while the starter hasn't moved, only this is read.</summary>
+        public static List<Match> ReadFile(int fileId)
+        {
+            List<Match> found = new List<Match>();
+            string path = PathFor(fileId);
+            if (!File.Exists(path)) return found;
+
+            string[] lines;
+            try { lines = File.ReadAllLines(path); } catch (Exception ex) { AppLogger.WarnOnce("StarterRotomSource.ReadFile", ex); return found; }
+            FilesRead++;
+
+            {
+                string container = null;
+                int number = -1;
+                int inContainer = 0;
+                for (int i = 0; i < lines.Length; i++)
+                {
+                    System.Text.RegularExpressions.Match header = Container.Match(lines[i]);
+                    if (header.Success)
+                    {
+                        container = header.Groups[1].Value;
+                        number = header.Groups[2].Success ? int.Parse(header.Groups[2].Value) : -1;
+                        inContainer = 0;
+                    }
+
+                    System.Text.RegularExpressions.Match m = Give.Match(lines[i]);
+                    if (!m.Success) continue;
+
+                    string species = m.Groups[1].Value.Trim();
+                    int.TryParse(m.Groups[2].Value.Trim(), out int level);
+
+                    found.Add(new Match
+                    {
+                        FileId = fileId,
+                        LineNumber = i + 1,
+                        Line = lines[i],
+                        SpeciesArgument = species,
+                        Level = level,
+                        HeldItemArgument = m.Groups[3].Value.Trim(),
+                        NamedAsStarter = PrecededByStarterLookup(lines, i, species),
+                        Container = container,
+                        IndexInContainer = inContainer++,
+                        ContainerNumber = number,
+                    });
+                }
+            }
+
+            return found;
+        }
+
+        /// <summary>
+        /// Whether a GetPlayerStarterSpecies just above writes the variable this command reads. A couple
+        /// of lines of slack, because a WaitFadeScreen or the like can sit between them.
+        /// </summary>
+        private static bool PrecededByStarterLookup(string[] lines, int at, string speciesArgument)
+        {
+            // A file that has been through the old single-file decompile has no names left in it:
+            // VAR_0x8000 reads as 0x8000. Both spellings have to count, or the starter becomes
+            // unfindable in exactly the projects that have already been damaged.
+            if (!LooksLikeVariable(speciesArgument)) return false;
+            for (int back = 1; back <= 3 && at - back >= 0; back++)
+            {
+                System.Text.RegularExpressions.Match m = Starter.Match(lines[at - back]);
+                if (!m.Success) continue;
+                return string.Equals(m.Groups[1].Value.Trim(), speciesArgument, StringComparison.OrdinalIgnoreCase);
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Rewrites the level and held item on that line, then saves as the Script editor does: write the source,
+        /// then compile. Only those arguments are rebuilt, so a comment on the line survives. Returns null on
+        /// success, or the error, with the source put back if the compile failed.
+        /// </summary>
+        public static async Task<string> SaveAsync(Match m, int? level, string heldItemArgument)
+        {
+            if (m == null) return "Nothing to change.";
+            string path = PathFor(m.FileId);
+            if (!File.Exists(path)) return Path.GetFileName(path) + " isn't there any more.";
+
+            string[] lines;
+            string newline;
+            bool endsWithNewline;
+            try
+            {
+                string text = File.ReadAllText(path);
+                // Written back with the file's line endings, not the platform's.
+                newline = text.Contains("\r\n") ? "\r\n" : "\n";
+                endsWithNewline = text.EndsWith("\n");
+                lines = text.Replace("\r\n", "\n").Split('\n');
+                if (endsWithNewline) lines = lines.Take(lines.Length - 1).ToArray();
+            }
+            catch (Exception ex) { return "Couldn't read the script source: " + ex.Message; }
+            void Write()
+            {
+                ProjectSourceWatcher.Expect(path);
+                PlainFiles.WriteText(path, string.Join(newline, lines) + (endsWithNewline ? newline : ""));
+            }
+
+            if (m.LineNumber < 1 || m.LineNumber > lines.Length)
+                return "That line is no longer in the file.";
+
+            string original = lines[m.LineNumber - 1];
+            System.Text.RegularExpressions.Match give = Give.Match(original);
+            if (!give.Success) return "That line is no longer a GivePokemon, so nothing was changed.";
+
+            string newLevel = level?.ToString() ?? give.Groups[2].Value.Trim();
+            string newItem = heldItemArgument ?? give.Groups[3].Value.Trim();
+            string indent = original.Substring(0, original.Length - original.TrimStart().Length);
+            string tail = original.Substring(give.Groups[3].Index + give.Groups[3].Length);
+
+            lines[m.LineNumber - 1] =
+                $"{indent}GivePokemon {give.Groups[1].Value.Trim()}, {newLevel}, {newItem}{tail}";
+
+            try { Write(); }
+            catch (Exception ex) { return "Couldn't write the script source: " + ex.Message; }
+
+            string failure = await CompileProjectAsync(path);
+            if (failure != null)
+            {
+                lines[m.LineNumber - 1] = original;
+                try { Write(); } catch (Exception ex) { AppLogger.Warn("Starter source: restoring the original line: " + ex.Message); }
+                return failure;
+            }
+
+            m.Line = lines[m.LineNumber - 1];
+            if (level.HasValue) m.Level = level.Value;
+            if (heldItemArgument != null) m.HeldItemArgument = heldItemArgument;
+            return null;
+        }
+
+        /// <summary>
+        /// The same call the Script editor makes. Project mode, run from the project root, which is
+        /// where rotom.toml is and how it finds its database and constants. It only rebuilds what
+        /// changed, so this costs one file.
+        /// </summary>
+        private static async Task<string> CompileProjectAsync(string sourcePath)
+        {
+            if (!RotomTool.IsAvailable) return "The rotom tool isn't available, so nothing was saved.";
+            try
+            {
+                // Only this file decides: another source failing must not undo the starter edit.
+                RotomTool.Result result = await RotomTool.CompileProjectAsync();
+                string failure = RotomTool.FailureFor(result, sourcePath);
+                if (failure != null)
+                    return "The script didn't compile, so it was put back as it was: " + failure;
+            }
+            catch (Exception ex)
+            {
+                return "The script didn't compile, so it was put back as it was: " + ex.Message;
+            }
+            return null;
+        }
+        /// <summary>
+        /// Saves with a readable item name where rotom accepts one, and the plain number where it does
+        /// not. Item names are rotom built-ins, not something the project database lists, so there is
+        /// no way to know in advance whether ITEM_SOMETHING exists: try it, and fall back on the number
+        /// if the compile says no. The number always compiles.
+        /// </summary>
+        public static async Task<string> SaveAsync(Match m, int? level, string itemName, int itemNumber)
+        {
+            if (m == null) return "Nothing to change.";
+
+            if (!string.IsNullOrWhiteSpace(itemName))
+            {
+                string failure = await SaveAsync(m, level, itemName);
+                if (failure == null) return null;
+            }
+            return await SaveAsync(m, level, itemNumber.ToString());
+        }
+
+        /// <summary>The rotom spelling of an item, from the name DSPRE shows. Null when it cannot.</summary>
+        public static string ItemToken(string displayName)
+        {
+            if (string.IsNullOrWhiteSpace(displayName)) return null;
+            StringBuilder sb = new System.Text.StringBuilder("ITEM_");
+            bool lastWasBreak = true;
+            foreach (char c in displayName.Trim())
+            {
+                if (char.IsLetterOrDigit(c))
+                {
+                    sb.Append(char.ToUpperInvariant(c));
+                    lastWasBreak = false;
+                }
+                else if (!lastWasBreak)
+                {
+                    sb.Append('_');
+                    lastWasBreak = true;
+                }
+            }
+            string token = sb.ToString().TrimEnd('_');
+            return token.Length > "ITEM_".Length ? token : null;
+        }
+        /// <summary>A variable, written either as a name or as the raw number a flattened file has.</summary>
+        private static bool LooksLikeVariable(string argument)
+        {
+            if (string.IsNullOrWhiteSpace(argument)) return false;
+            if (argument.StartsWith("VAR_", StringComparison.OrdinalIgnoreCase)) return true;
+
+            string text = argument.Trim();
+            bool hex = text.StartsWith("0x", StringComparison.OrdinalIgnoreCase);
+            return int.TryParse(hex ? text.Substring(2) : text,
+                                hex ? System.Globalization.NumberStyles.HexNumber
+                                    : System.Globalization.NumberStyles.Integer,
+                                System.Globalization.CultureInfo.InvariantCulture, out int value)
+                && value >= 0x4000;
+        }
+        /// <summary>What checking a place the user pointed at came to.</summary>
+        public enum Verdict
+        {
+            Usable,            // a give command taking its species from a variable; editable
+            SpeciesIsItsOwn,   // a give command with the species written in, so it picks its own
+            NotAGiveCommand,   // nothing editable there
+        }
+
+        public sealed class Check
+        {
+            public Verdict Verdict;
+            public Match Found;
+            public string Message;
+        }
+
+        /// <summary>
+        /// Looks for a give command in the script the user named, so a romhack that moved the starter
+        /// somewhere the pair rule cannot see can still be pointed at by hand.
+        /// </summary>
+        public static Check Verify(int fileId, string container)
+        {
+            List<Match> inThere = FindAll()
+                .Where(m => m.FileId == fileId)
+                .Where(m => string.IsNullOrWhiteSpace(container)
+                         || string.Equals(m.Container, container.Trim(), StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            Match usable = inThere.FirstOrDefault(m => m.SpeciesFromVariable);
+            if (usable != null)
+                return new Check { Verdict = Verdict.Usable, Found = usable,
+                                   Message = "Found it: " + usable.Summary + "." };
+
+            if (inThere.Count > 0)
+                return new Check { Verdict = Verdict.SpeciesIsItsOwn, Found = inThere[0],
+                                   Message = "DSPRE can't edit this script: it sets the species itself." };
+
+            return new Check { Verdict = Verdict.NotAGiveCommand,
+                               Message = "There is no GivePokemon command there." };
+        }
+
+        /// <summary>The scripts in a file, so the picker can list them.</summary>
+        public static List<string> ContainersIn(int fileId)
+        {
+            List<string> names = new List<string>();
+            string path = PathFor(fileId);
+            if (!File.Exists(path)) return names;
+            try
+            {
+                foreach (string line in File.ReadAllLines(path))
+                {
+                    System.Text.RegularExpressions.Match m = Container.Match(line);
+                    if (m.Success) names.Add(m.Groups[1].Value);
+                }
+            }
+            catch (Exception ex) { AppLogger.Warn("Starter source: reading container names: " + ex.Message); }
+            return names;
+        }
+
+        /// <summary>
+        /// The give command where an untouched game keeps its starter, or null when it isn't there; only then are the
+        /// other files read.
+        /// </summary>
+        public static Match FindVanilla()
+        {
+            int file = RomInfo.StarterHeldItemScriptFileID;
+            int script = RomInfo.StarterCommandScriptNumber;
+            if (file < 0 || script < 0) return null;
+
+            return ReadFile(file).FirstOrDefault(m => m.ContainerNumber == script && m.NamedAsStarter);
+        }
+
+        /// <summary>The command a remembered choice points at, again without reading the whole game.</summary>
+        public static Match FindByKey(string key)
+        {
+            if (string.IsNullOrEmpty(key)) return null;
+            string[] bits = key.Split(':');
+            if (bits.Length < 2 || !int.TryParse(bits[1], out int fileId)) return null;
+            return ReadFile(fileId).FirstOrDefault(m => m.Key == key);
+        }
+
+        /// <summary>The give command the game marks as the starter, or null.</summary>
+        public static Match FindStarter() => FindAll().FirstOrDefault(f => f.NamedAsStarter);
+
+    }
+}

@@ -1,0 +1,233 @@
+﻿using Newtonsoft.Json;
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using static MKDS_Course_Editor.NSBTP.NSBTP.NSBTP_File;
+using Directory = System.IO.Directory;
+using File = System.IO.File;
+
+namespace DSPRE
+{
+
+    public class DspreSettings
+    {
+        public byte MenuLayout { get; set; } = 2;
+        public bool TextEditorPreferHex { get; set; } = false;
+        public int ScriptEditorFormatPreference { get; set; } = 0;
+        // Which of the move-animation editor's three ways of reading a script was last used:
+        // 0 guided, 1 script, 2 raw.
+        public int MoveAnimationViewMode { get; set; } = 0;
+
+        /// <summary>Battle Display preview only: animation ticks per second, 30 as in game or 60.</summary>
+        public int BattlePreviewFps { get; set; } = 30;
+        // Flat 2D event view, off by default so the 3D scene stays the first impression.
+        public bool EventEditorFlat2D { get; set; } = false;
+        public bool MapEditorFlat2D { get; set; } = false;
+        public bool EventEditorTileGrid { get; set; } = false;
+        public bool MapEditorTileGrid { get; set; } = false;
+        public string ExportPath { get; set; } = "";
+        public string MapImportStarterPoint { get; set; } = "";
+        public string OpenDefaultRom { get; set; } = "";
+
+        /// <summary>The emulator Build and Run uses without asking, as an EmulatorKind name; empty asks each time.</summary>
+        public string PreferredEmulator { get; set; } = "";
+        /// <summary>Where each emulator the user has pointed DSPRE at lives, by EmulatorKind name.</summary>
+        public Dictionary<string, string> EmulatorPaths { get; set; } = new Dictionary<string, string>();
+        /// <summary>The save Build and Run offers to start each project from, keyed by project folder.</summary>
+        public Dictionary<string, string> TestSaves { get; set; } = new Dictionary<string, string>();
+        /// <summary>Whether Build and Run on a linked hg-engine checkout runs make first.</summary>
+        public bool BuildAndRunCompiles { get; set; } = true;
+
+        /// <summary>
+        /// Which give-a-Pokemon command the starter editor was told to treat as the starter, keyed by
+        /// project folder, and what the set of candidates looked like at the time. The fingerprint is
+        /// how a newly added one gets noticed without asking on every open.
+        /// </summary>
+        public Dictionary<string, string> StarterCommandChoice { get; set; } = new Dictionary<string, string>();
+        public Dictionary<string, string> StarterCommandFingerprint { get; set; } = new Dictionary<string, string>();
+        public bool NeverAskForOpening { get; set; } = false;
+        public bool DatabasesPulled { get; set; } = false;
+        public bool AutomaticallyCheckForUpdates { get; set; } = true;
+        public bool AutomaticallyUpdateDBs { get; set; } = true;
+        public bool ConvertLegacyText { get; set; } = true;
+        public string RotomEditorTheme { get; set; } = "OneDark";
+
+        /// <summary>The light or dark skin, so the choice survives closing the program.</summary>
+        public bool DarkTheme { get; set; } = true;
+
+        /// <summary>Avalonia scale override (0 = use the platform scale).</summary>
+        public double UiScale { get; set; } = 0;
+
+        // 3D-view camera behaviour (mouse). Speeds are multipliers (1.0 = default); invert flags flip an axis.
+        public float CamPanSpeed { get; set; } = 1.0f;
+        public float CamOrbitSpeed { get; set; } = 1.0f;
+        public float CamZoomSpeed { get; set; } = 1.0f;
+        public bool CamInvertPanX { get; set; } = false;
+        public bool CamInvertPanY { get; set; } = true;
+        public bool CamInvertOrbitX { get; set; } = false;
+        public bool CamInvertOrbitY { get; set; } = false;
+        public bool CamInvertZoom { get; set; } = false;
+
+        /// <summary>Show the Welcome &amp; Tutorial window when the Avalonia shell starts.</summary>
+        public bool ShowWelcomeOnStartup { get; set; } = true;
+
+        /// <summary>Ask before opening another project closes the current one, when nothing is unsaved.</summary>
+        public bool AskBeforeSwitchingProject { get; set; } = true;
+
+        /// <summary>Script editor: draw rotom-lsp's parameter names before each value.</summary>
+        public bool ScriptEditorInlineHints { get; set; } = true;
+
+        /// <summary>Whether the first-time guided tour has already run (or been skipped). While false,
+        /// the tour starts automatically after the next successful ROM load in the Avalonia shell.</summary>
+        public bool GuidedTourShown { get; set; } = false;
+
+        /// <summary>Editors whose first-open tour has run; the rest show theirs the next time they open.</summary>
+        public List<string> EditorToursShown { get; set; } = new List<string>();
+
+        /// <summary>Project folders that generated patch credits or declined the offer after saving.</summary>
+        public List<string> PatchCreditsHandled { get; set; } = new List<string>();
+
+        /// <summary>Main-window placement, saved on close and restored at startup (0 = unset).</summary>
+        public double MainWindowWidth { get; set; } = 0;
+        public double MainWindowHeight { get; set; } = 0;
+        public bool MainWindowMaximized { get; set; } = false;
+
+        /// <summary>Side panel widths the user dragged to in the Map and Event editors (0 = default).</summary>
+        public double MapEditorSidePanelWidth { get; set; } = 0;
+        public double EventEditorSidePanelWidth { get; set; } = 0;
+
+        /// <summary>How the map model editor's tile palette pictures tiles: 0 automatic, 1 angled, 2 from above.</summary>
+        public int MapTilesView { get; set; } = 0;
+
+        /// <summary>Most-recently-opened projects (.nds files or extracted folders), newest first.</summary>
+        public List<string> RecentProjects { get; set; } = new List<string>();
+
+        /// <summary>Menu items pinned beside the menus, by their place in the menus ("Trainers > Trainer editor").</summary>
+        public List<string> FavouriteMenuItems { get; set; } = new List<string>();
+
+        /// <summary>Track changes: git and gh, empty to find them on PATH.</summary>
+        public string GitPath { get; set; } = "";
+        public string GitHubCliPath { get; set; } = "";
+        /// <summary>Track changes: each project folder's changes folder.</summary>
+        public Dictionary<string, string> ChangesFolders { get; set; } = new Dictionary<string, string>();
+        /// <summary>Track changes: project folders whose "not tracking" bar was dismissed.</summary>
+        public List<string> TrackingDeclined { get; set; } = new List<string>();
+        /// <summary>Track changes: where each base ROM is on this machine, by SHA-1.</summary>
+        public Dictionary<string, string> BaseRoms { get; set; } = new Dictionary<string, string>();
+        /// <summary>Track changes: SHA-1 of each ROM built here while tracking, to the project id it was built from.</summary>
+        public Dictionary<string, string> BuiltRoms { get; set; } = new Dictionary<string, string>();
+
+        /// <summary>Set once the default pins have been offered, so pins removed later stay removed.</summary>
+        public bool FavouritesSeeded { get; set; }
+    }
+
+    public static class SettingsManager
+    {
+        public static DspreSettings Settings { get; private set; }
+
+        private static readonly string SettingsFile = Path.Combine(AppPaths.DspreDataPath, "userSettings.json");
+
+        // The settings as last read or written by this window. A save writes only what changed since, so two
+        // DSPRE windows don't undo each other's changes.
+        private static Newtonsoft.Json.Linq.JObject _saved;
+
+        private static readonly JsonSerializerSettings Replace = new JsonSerializerSettings { ObjectCreationHandling = ObjectCreationHandling.Replace };
+
+        public static void Load()
+        {
+            AppLogger.Info("Loading app settings");
+            if (System.IO.File.Exists(SettingsFile))
+            {
+                string json = System.IO.File.ReadAllText(SettingsFile);
+                Settings = JsonConvert.DeserializeObject<DspreSettings>(json);
+                _saved = Newtonsoft.Json.Linq.JObject.FromObject(Settings);
+            }
+            else
+            {
+                Settings = new DspreSettings();
+                Save();
+            }
+        }
+
+        public static void Save()
+        {
+            string directory = Path.GetDirectoryName(SettingsFile);
+
+            if (!string.IsNullOrEmpty(directory))
+                Directory.CreateDirectory(directory);
+
+            Newtonsoft.Json.Linq.JObject mine = Newtonsoft.Json.Linq.JObject.FromObject(Settings);
+            Newtonsoft.Json.Linq.JObject onDisk = ReadDisk();
+            Newtonsoft.Json.Linq.JObject merged = new Newtonsoft.Json.Linq.JObject();
+            foreach (Newtonsoft.Json.Linq.JProperty p in mine.Properties())
+            {
+                Newtonsoft.Json.Linq.JToken other = onDisk?.GetValue(p.Name, StringComparison.OrdinalIgnoreCase);
+                merged[p.Name] = _saved == null ? p.Value : Merge(p.Value, _saved[p.Name], other);
+            }
+            PlainFiles.WriteText(SettingsFile, merged.ToString(Formatting.Indented));
+            _saved = merged;
+            // Take up what another window changed, so this one shows it too.
+            JsonConvert.PopulateObject(merged.ToString(), Settings, Replace);
+        }
+
+        // Per-project tables (test saves, emulator paths) are merged key by key, so two windows each keep their own.
+        private static Newtonsoft.Json.Linq.JToken Merge(Newtonsoft.Json.Linq.JToken mine, Newtonsoft.Json.Linq.JToken saved,
+            Newtonsoft.Json.Linq.JToken onDisk)
+        {
+            if (onDisk == null) return mine;
+            if (Newtonsoft.Json.Linq.JToken.DeepEquals(mine, saved)) return onDisk;
+            if (mine is not Newtonsoft.Json.Linq.JObject m || onDisk is not Newtonsoft.Json.Linq.JObject d) return mine;
+            Newtonsoft.Json.Linq.JObject s = saved as Newtonsoft.Json.Linq.JObject;
+            Newtonsoft.Json.Linq.JObject result = new Newtonsoft.Json.Linq.JObject();
+            foreach (string key in m.Properties().Select(p => p.Name).Union(d.Properties().Select(p => p.Name)))
+            {
+                Newtonsoft.Json.Linq.JToken here = m[key], before = s?[key], there = d[key];
+                if (here == null)
+                {
+                    if (before == null && there != null) result[key] = there;   // added by another window
+                    continue;                                                   // removed here
+                }
+                result[key] = Merge(here, before, there);
+            }
+            return result;
+        }
+
+        private static Newtonsoft.Json.Linq.JObject ReadDisk()
+        {
+            if (!File.Exists(SettingsFile)) return null;
+            try { return Newtonsoft.Json.Linq.JObject.Parse(File.ReadAllText(SettingsFile)); }
+            catch (Exception ex) when (ex is IOException || ex is JsonException)
+            {
+                AppLogger.WarnOnce("SettingsManager.ReadDisk", ex);
+                return null;
+            }
+        }
+
+        public const int MaxRecentProjects = 10;
+
+        /// <summary>Puts <paramref name="path"/> (a .nds file or extracted project folder) at the top of the recent list.</summary>
+        public static void RecordRecentProject(string path)
+        {
+            if (Settings == null || string.IsNullOrWhiteSpace(path)) return;
+            List<string> list = Settings.RecentProjects ?? (Settings.RecentProjects = new List<string>());
+            list.RemoveAll(p => string.Equals(p, path, StringComparison.OrdinalIgnoreCase));
+            list.Insert(0, path);
+            if (list.Count > MaxRecentProjects)
+            {
+                list.RemoveRange(MaxRecentProjects, list.Count - MaxRecentProjects);
+            }
+            Save();
+        }
+
+        /// <summary>Removes a stale entry (deleted/moved project) from the recent list.</summary>
+        public static void RemoveRecentProject(string path)
+        {
+            if (Settings?.RecentProjects == null) return;
+            Settings.RecentProjects.RemoveAll(p => string.Equals(p, path, StringComparison.OrdinalIgnoreCase));
+            Save();
+        }
+    }
+}

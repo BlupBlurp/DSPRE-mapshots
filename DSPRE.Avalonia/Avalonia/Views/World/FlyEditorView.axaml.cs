@@ -1,0 +1,47 @@
+using Avalonia.Controls;
+using Avalonia.Interactivity;
+using Avalonia.Markup.Xaml;
+using DSPRE.Avalonia.ViewModels;
+using System;
+
+namespace DSPRE.Avalonia.Views.World
+{
+    public partial class FlyEditorView : Window
+    {
+        private FlyEditorViewModel _vm;
+
+        public FlyEditorView(System.Collections.Generic.List<string> headerNames)
+        {
+            AvaloniaXamlLoader.Load(this);
+            _vm = new FlyEditorViewModel(headerNames);
+            DataContext = _vm;
+            // VM owns the bound Title (+ "●" marker); chrome adds Ctrl+S + the close guard.
+            EditorWindowChrome.Attach(this, _vm, title: () => _vm.Title);
+
+            // A zero width still leaves a sliver with a live cell in it, so the other family's columns are hidden.
+            DataGrid unlock = this.FindControl<DataGrid>("UnlockGrid");
+            for (int i = 0; unlock != null && i < unlock.Columns.Count; i++)
+                unlock.Columns[i].IsVisible = i < 3 ? _vm.IsDpOrPlat : _vm.IsHgss;
+        }
+
+        public FlyEditorView()
+        {
+            AvaloniaXamlLoader.Load(this);
+            if (Design.IsDesignMode)
+            {
+                _vm = new FlyEditorViewModel();
+                DataContext = _vm;
+                return;
+            }
+            throw new InvalidOperationException("Parameterless constructor only for design time.");
+        }
+
+        private async void Save_Click(object sender, RoutedEventArgs e)
+            => await _vm.SaveCommandAsync();
+
+        private async void Discard_Click(object sender, RoutedEventArgs e)
+        {
+            if (await DialogHelper.ConfirmDiscardAsync(this)) _vm?.DiscardChanges();
+        }
+    }
+}

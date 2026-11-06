@@ -1,0 +1,58 @@
+using System.Threading.Tasks;
+using Avalonia.Controls;
+using Avalonia.Interactivity;
+using DSPRE.Avalonia.ViewModels;
+
+namespace DSPRE.Avalonia.Views.Text
+{
+    public partial class LevelScriptEditorView : UserControl
+    {
+        private LevelScriptEditorViewModel VM => DataContext as LevelScriptEditorViewModel;
+        private bool _setupDone;
+
+        public LevelScriptEditorView()
+        {
+            InitializeComponent();
+            Loaded += OnLoadedSetup;
+        }
+
+        public LevelScriptEditorView(LevelScriptEditorViewModel vm) : this() { DataContext = vm; }
+
+        private async void OnLoadedSetup(object sender, RoutedEventArgs e)
+        {
+            // Loaded fires on every tab revisit; ROM loads call EnsureSetupAsync themselves.
+            if (!_setupDone) await EnsureSetupAsync();
+        }
+
+        /// <summary>Sets up the view model; see <see cref="MapsWorkspaceView"/>.</summary>
+        /// <param name="ownerOverride">The owning window, for a tab not yet in the visual tree.</param>
+        public async Task EnsureSetupAsync(Window ownerOverride = null)
+        {
+            if (Design.IsDesignMode) return;
+            LevelScriptEditorViewModel vm = VM;
+            if (vm == null || !AvaloniaEditorLauncher.IsRomLoaded) return;
+            Window owner = ownerOverride ?? TopLevel.GetTopLevel(this) as Window;
+            if (owner == null) return;
+            if (!_setupDone) owner.Closed += (_, _) => vm.Detach();
+            _setupDone = true;
+            await vm.SetupAsync(owner);
+        }
+
+        private void Save_Click(object sender, RoutedEventArgs e) => VM?.Save();
+        private async void Import_Click(object sender, RoutedEventArgs e) => await DialogHelper.GuardAsync(() => VM?.ImportAsync() ?? Task.CompletedTask, "The level script wasn't imported.", ErrorTitle);
+        private async void Export_Click(object sender, RoutedEventArgs e) => await DialogHelper.GuardAsync(() => VM?.ExportAsync() ?? Task.CompletedTask, "The level script wasn't exported.", ErrorTitle);
+        private void ShowFile_Click(object sender, RoutedEventArgs e) => VM?.ShowFile();
+        private void Add_Click(object sender, RoutedEventArgs e) => VM?.AddTrigger();
+        private async void AddFile_Click(object sender, RoutedEventArgs e) => await DialogHelper.GuardAsync(() => VM?.AddFileAsync() ?? Task.CompletedTask, "The level script file wasn't added.", ErrorTitle);
+        private async void RemoveFile_Click(object sender, RoutedEventArgs e) => await DialogHelper.GuardAsync(() => VM?.RemoveLastFileAsync() ?? Task.CompletedTask, "The level script file wasn't removed.", ErrorTitle);
+        private void Remove_Click(object sender, RoutedEventArgs e) => VM?.RemoveTrigger();
+        private void GoToScript_Click(object sender, RoutedEventArgs e) => VM?.GoToTriggerScript();
+
+        private const string ErrorTitle = "Level script editor";
+
+        private async void Discard_Click(object sender, RoutedEventArgs e)
+        {
+            if (await DialogHelper.ConfirmDiscardAsync(this)) (DataContext as DSPRE.Editors.IEditorWithUnsavedChanges)?.DiscardChanges();
+        }
+    }
+}

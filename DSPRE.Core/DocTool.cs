@@ -1,0 +1,1012 @@
+﻿﻿using DSPRE.Resources;
+using DSPRE.ROMFiles;
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using static DSPRE.MoveData;
+using static DSPRE.RomInfo;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+
+namespace DSPRE
+{
+    internal class DocTool
+    {
+        private static bool _eventEditorPrereqsReady = false;
+
+        public static void ExportDocs(string docsFolderPath)
+        {
+            string pokePersonalDataPath = Path.Combine(docsFolderPath, "PokemonPersonalData.csv");
+            string learnsetDataPath = Path.Combine(docsFolderPath, "LearnsetData.csv");
+            string evolutionDataPath = Path.Combine(docsFolderPath, "EvolutionData.csv");
+            string trainerDataPath = Path.Combine(docsFolderPath, "TrainerData.txt");
+            string moveDataPath = Path.Combine(docsFolderPath, "MoveData.csv");
+            string TMHMDataPath = Path.Combine(docsFolderPath, "TMHMData.csv");
+            string eggMoveDataPath = Path.Combine(docsFolderPath, "EggMoveData.csv");
+            string eventOverworldsPath = Path.Combine(docsFolderPath, "EventOverworlds.csv");
+            string mapHeadersPath = Path.Combine(docsFolderPath, "MapHeaders.csv");
+            string encounterJsonPath = Path.Combine(docsFolderPath, "Encounters.json");
+
+            EnsureEventEditorPrereqs();
+
+            DSUtils.TryUnpackNarcs(new List<DirNames> {
+                DirNames.PersonalPokeData,
+                DirNames.Learnsets,
+                DirNames.Evolutions,
+                DirNames.TrainerParty,
+                DirNames.TrainerProperties,
+                DirNames.MoveData,
+                DirNames.ItemData,
+                DirNames.Encounters,
+                DirNames.Scripts,
+                DirNames.EventFiles
+            });
+
+            string[] pokeNames = RomInfo.GetPokemonNamesWithForms(RomInfo.GetPersonalFilesCount());
+            string[] itemNames = RomInfo.GetItemNames();
+            string[] abilityNames = RomInfo.GetAbilityNames();
+            string[] moveNames = RomInfo.GetAttackNames();
+            string[] trainerNames = RomInfo.GetSimpleTrainerNames();
+            string[] trainerClassNames = RomInfo.GetTrainerClassNames();
+            string[] typeNames = RomInfo.GetTypeNames();
+
+            if (!Directory.Exists(docsFolderPath))
+            {
+                Directory.CreateDirectory(docsFolderPath);
+            }
+
+            ExportPersonalDataToCSV(pokePersonalDataPath, pokeNames, abilityNames, typeNames, itemNames);
+            ExportLearnsetDataToCSV(learnsetDataPath, pokeNames, moveNames);
+            ExportEvolutionDataToCSV(evolutionDataPath, pokeNames, itemNames, moveNames);
+            ExportTrainersToText(trainerDataPath, trainerNames, trainerClassNames, pokeNames, itemNames, moveNames, abilityNames);
+            ExportMoveDataToCSV(moveDataPath, moveNames, typeNames);
+            ExportTMHMDataToCSV(TMHMDataPath, pokeNames);
+
+            ExportEggMoveDataToCSV(ReadEggMoveDataForDocTool(), eggMoveDataPath, pokeNames, moveNames);
+
+            ExportEventOverworldsToCSV(eventOverworldsPath);
+            ExportMapHeadersToCSV(mapHeadersPath);
+            ExportEncountersToJson(encounterJsonPath);
+            ExportScriptsToDocs(Path.Combine(docsFolderPath, "scripts"));
+        }
+
+
+        private static void EnsureEventEditorPrereqs()
+        {
+            if (_eventEditorPrereqsReady) return;
+            _eventEditorPrereqsReady = true;
+
+            // The archives the Event editor unpacks.
+            DSUtils.TryUnpackNarcs(new List<DirNames> {
+                DirNames.AreaData,
+                DirNames.TrainerProperties,
+            });
+
+            RomInfo.SetOWtable();
+            RomInfo.Set3DOverworldsDict();
+            RomInfo.ReadOWTable();
+        }
+
+        private static void ExportEncountersToJson(string outputPath)
+        {
+            string encountersDir = RomInfo.GameDirs[RomInfo.DirNames.Encounters].unpackedDir;
+
+            List<string> files = Directory.GetFiles(encountersDir)
+                .Where(p => int.TryParse(Path.GetFileName(p), out _))
+                .OrderBy(p => int.Parse(Path.GetFileName(p)))
+                .ToList();
+
+  
+            string[] pokeNames = GetPokemonNamesWithForms();
+
+            var root = new
+            {
+                generatedAt = DateTime.UtcNow,
+                projectName = RomInfo.ProjectName,
+                romID = RomInfo.RomID,
+                gameFamily = RomInfo.GameFamily.ToString(),
+                gameVersion = RomInfo.GameVersion.ToString(),
+                gameLanguage = RomInfo.GameLanguage.ToString(),
+                encounters = new List<object>()
+            };
+
+            foreach (string path in files)
+            {
+                int fileId = int.Parse(Path.GetFileName(path));
+
+                object encObj;
+
+                if (RomInfo.GameFamily == RomInfo.GameFamilies.DP ||
+                    RomInfo.GameFamily == RomInfo.GameFamilies.Plat)
+                {
+                    encObj = ExportDPPt(fileId, path, pokeNames);
+                }
+                else if (RomInfo.GameFamily == RomInfo.GameFamilies.HGSS)
+                {
+                    encObj = ExportHGSS(fileId, path, pokeNames);
+                }
+                else
+                {
+                    encObj = new { fileId = fileId, unsupported = true };
+                }
+
+                root.encounters.Add(encObj);
+            }
+
+            JsonSerializerOptions opts = new System.Text.Json.JsonSerializerOptions
+            {
+                WriteIndented = true,
+                DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+            };
+
+            PlainFiles.WriteText(outputPath, System.Text.Json.JsonSerializer.Serialize(root, opts));
+        }
+
+
+        private static object ExportDPPt(int fileId, string path, string[] pokeNames)
+        {
+            EncounterFileDPPt enc;
+            using (FileStream fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+                enc = new EncounterFileDPPt(fs);
+
+            return new
+            {
+                fileId,
+
+                rates = new
+                {
+                    walking = enc.WalkingRate,
+                    surf = enc.SurfRate,
+                    oldRod = enc.OldRodRate,
+                    goodRod = enc.GoodRodRate,
+                    superRod = enc.SuperRodRate
+                },
+
+                walking = ExportWalkingDPPtNamed(enc, pokeNames),
+
+                timeSpecific = new
+                {
+                    day = ExportU32SpeciesNamed(enc.DayPokemon, pokeNames),
+                    night = ExportU32SpeciesNamed(enc.NightPokemon, pokeNames)
+                },
+
+                radar = ExportU32SpeciesNamed(enc.RadarPokemon, pokeNames),
+
+                dualSlot = new
+                {
+                    ruby = ExportU32SpeciesNamed(enc.RubyPokemon, pokeNames),
+                    sapphire = ExportU32SpeciesNamed(enc.SapphirePokemon, pokeNames),
+                    emerald = ExportU32SpeciesNamed(enc.EmeraldPokemon, pokeNames),
+                    fireRed = ExportU32SpeciesNamed(enc.FireRedPokemon, pokeNames),
+                    leafGreen = ExportU32SpeciesNamed(enc.LeafGreenPokemon, pokeNames)
+                },
+
+                // (keep formRates/unownTable as-is; those are not species ids in DSPRE’s UI)
+
+                swarms = ExportU16Named(enc.SwarmPokemon, pokeNames),
+
+
+
+                forms = new
+                {
+                    formRates = ExportU32(enc.FormRates), // 5
+                    unownTable = enc.UnownTable
+                },
+
+                surf = ExportMinMaxU16Named(enc.SurfPokemon, enc.SurfMinLevels, enc.SurfMaxLevels, pokeNames),
+                oldRod = ExportMinMaxU16Named(enc.OldRodPokemon, enc.OldRodMinLevels, enc.OldRodMaxLevels, pokeNames),
+                goodRod = ExportMinMaxU16Named(enc.GoodRodPokemon, enc.GoodRodMinLevels, enc.GoodRodMaxLevels, pokeNames),
+                superRod = ExportMinMaxU16Named(enc.SuperRodPokemon, enc.SuperRodMinLevels, enc.SuperRodMaxLevels, pokeNames),
+            };
+        }
+
+        private static List<object> ExportU32SpeciesNamed(uint[] arr, string[] pokeNames)
+        {
+            if (arr == null || arr.Length == 0) return null;
+
+            List<object> list = new List<object>(arr.Length);
+            for (int i = 0; i < arr.Length; i++)
+            {
+                int speciesId = unchecked((int)arr[i]);
+                list.Add(SpeciesObj(i, speciesId, pokeNames));
+            }
+            return list;
+        }
+
+        private static object ExportWalkingDPPtNamed(EncounterFileDPPt enc, string[] pokeNames)
+        {
+            List<object> slots = new List<object>(12);
+            for (int i = 0; i < 12; i++)
+            {
+                int speciesId = unchecked((int)enc.WalkingPokemon[i]);
+                slots.Add(new
+                {
+                    slot = i,
+                    level = enc.WalkingLevels[i],
+                    species = speciesId,
+                    speciesName = NameForSpecies(speciesId, pokeNames)
+                });
+            }
+            return slots;
+        }
+
+        private static object ExportWalkingDPPt(EncounterFileDPPt enc)
+        {
+            List<object> slots = new List<object>();
+
+            for (int i = 0; i < 12; i++)
+            {
+                uint raw = enc.WalkingPokemon[i];
+
+                ushort species = (ushort)(raw & 0xFFFF);
+                byte minLv = (byte)((raw >> 16) & 0xFF);
+                byte maxLv = (byte)((raw >> 24) & 0xFF);
+
+                slots.Add(new
+                {
+                    slot = i,
+                    raw,
+                    species,
+                    minLv,
+                    maxLv,
+                    levelTableEntry = enc.WalkingLevels[i]
+                });
+            }
+
+            return slots;
+        }
+
+
+        private static object ExportHGSS(int fileId, string path, string[] pokeNames)
+        {
+            EncounterFileHGSS enc;
+            using (FileStream fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+                enc = new EncounterFileHGSS(fs);
+
+            return new
+            {
+                fileId,
+
+                rates = new
+                {
+                    walking = enc.WalkingRate,
+                    surf = enc.SurfRate,
+                    rockSmash = enc.RockSmashRate,
+                    oldRod = enc.OldRodRate,
+                    goodRod = enc.GoodRodRate,
+                    superRod = enc.SuperRodRate
+                },
+
+                walkingLevels = ExportU8(enc.WalkingLevels), // 12
+
+                grass = new
+                {
+                    morning = ExportU16Named(enc.MorningPokemon, pokeNames),
+                    day = ExportU16Named(enc.DayPokemon, pokeNames),
+                    night = ExportU16Named(enc.NightPokemon, pokeNames)
+                },
+
+                surf = ExportMinMaxU16Named(enc.SurfPokemon, enc.SurfMinLevels, enc.SurfMaxLevels, pokeNames),
+                rockSmash = ExportMinMaxU16Named(enc.RockSmashPokemon, enc.RockSmashMinLevels, enc.RockSmashMaxLevels, pokeNames),
+                oldRod = ExportMinMaxU16Named(enc.OldRodPokemon, enc.OldRodMinLevels, enc.OldRodMaxLevels, pokeNames),
+                goodRod = ExportMinMaxU16Named(enc.GoodRodPokemon, enc.GoodRodMinLevels, enc.GoodRodMaxLevels, pokeNames),
+                superRod = ExportMinMaxU16Named(enc.SuperRodPokemon, enc.SuperRodMinLevels, enc.SuperRodMaxLevels, pokeNames),
+
+                swarms = ExportU16Named(enc.SwarmPokemon, pokeNames),
+                pokegearMusic = new
+                {
+                    hoenn = ExportU16Named(enc.HoennMusicPokemon, pokeNames),
+                    sinnoh = ExportU16Named(enc.SinnohMusicPokemon, pokeNames)
+                }
+            };
+        }
+
+
+
+        private static string NameForSpecies(int speciesId, string[] pokeNames)
+        {
+            if (speciesId < 0 || speciesId >= pokeNames.Length) return $"UNKNOWN_{speciesId}";
+            return pokeNames[speciesId];
+        }
+
+        private static object SpeciesObj(int slot, int speciesId, string[] pokeNames)
+        {
+            return new
+            {
+                slot,
+                species = speciesId,
+                speciesName = NameForSpecies(speciesId, pokeNames)
+            };
+        }
+
+        private static string[] GetPokemonNamesWithForms() => RomInfo.GetPokemonNamesWithForms(RomInfo.GetPersonalFilesCount());
+
+        private static List<object> ExportMinMaxU16Named(ushort[] mons, byte[] minLv, byte[] maxLv, string[] pokeNames)
+        {
+            if (mons == null || minLv == null || maxLv == null) return null;
+
+            int n = Math.Min(mons.Length, Math.Min(minLv.Length, maxLv.Length));
+            List<object> list = new List<object>(n);
+
+            for (int i = 0; i < n; i++)
+            {
+                int speciesId = mons[i];
+                list.Add(new
+                {
+                    slot = i,
+                    species = speciesId,
+                    speciesName = NameForSpecies(speciesId, pokeNames),
+                    minLv = minLv[i],
+                    maxLv = maxLv[i]
+                });
+            }
+            return list;
+        }
+
+        private static List<object> ExportU16Named(ushort[] arr, string[] pokeNames)
+        {
+            if (arr == null || arr.Length == 0) return null;
+            List<object> list = new List<object>(arr.Length);
+            for (int i = 0; i < arr.Length; i++)
+                list.Add(SpeciesObj(i, arr[i], pokeNames));
+            return list;
+        }
+
+
+        private static List<object> ExportMinMaxU16(ushort[] mons, byte[] minLv, byte[] maxLv)
+        {
+            if (mons == null || minLv == null || maxLv == null) return null;
+
+            int n = Math.Min(mons.Length, Math.Min(minLv.Length, maxLv.Length));
+            List<object> list = new List<object>(n);
+
+            for (int i = 0; i < n; i++)
+            {
+                list.Add(new
+                {
+                    slot = i,
+                    species = mons[i],
+                    minLv = minLv[i],
+                    maxLv = maxLv[i]
+                });
+            }
+            return list;
+        }
+
+        private static ushort[] ExportU16(ushort[] arr) => arr == null ? null : (ushort[])arr.Clone();
+        private static uint[] ExportU32(uint[] arr) => arr == null ? null : (uint[])arr.Clone();
+        private static byte[] ExportU8(byte[] arr) => arr == null ? null : (byte[])arr.Clone();
+
+
+
+        private static void ExportScriptsToDocs(string scriptsDocsDir)
+        {
+            Directory.CreateDirectory(scriptsDocsDir);
+
+            // Make sure text archives + name dictionaries are available so ScriptCommand.name
+            // can render friendly enums (TRAINER_, SPECIES_, ITEM_, MOVE_, etc.) consistently.
+            DSUtils.TryUnpackNarcs(new List<DirNames> { DirNames.TextArchives });
+
+            Resources.ScriptDatabase.InitializePokemonNames();
+            Resources.ScriptDatabase.InitializeItemNames();
+            Resources.ScriptDatabase.InitializeMoveNames();
+            Resources.ScriptDatabase.InitializeTrainerNames();
+            Resources.ScriptDatabase.InitializeNpcTradeNames();
+            Resources.ScriptDatabase.InitializeTrainerClassNames();
+
+            int scriptCount = Filesystem.GetScriptCount();
+            int exported = 0;
+
+            for (int i = 0; i < scriptCount; i++)
+            {
+                try
+                {
+                    ScriptFile sf = new ScriptFile(i, readFunctions: true, readActions: false);
+
+                    // Level scripts and empty files are skipped.
+                    if (sf.IsLevelScript || sf.HasNoScripts)
+                        continue;
+
+                    string outPath = Path.Combine(scriptsDocsDir, $"{i:D4}.txt");
+                    sf.WritePlainTextFile(outPath, includeActions: false);
+                    exported++;
+                }
+                catch (Exception ex)
+                {
+                    AppLogger.Error($"Doc export: failed to export script {i:D4}: {ex.Message}");
+                }
+            }
+
+            AppLogger.Info($"Doc export: wrote {exported} script plaintext files to {scriptsDocsDir}");
+        }
+
+        private static void ExportMapHeadersToCSV(string mapHeadersPath)
+        {
+            int headerCount = MapHeader.GetHeaderCount();
+
+            using (StreamWriter sw = new StreamWriter(mapHeadersPath))
+            {
+                sw.WriteLine("HeaderID,ScriptFileID,EventFileID,MapNameIndexInTextArchive,WildPokemonFileID,WeatherID");
+
+                for (ushort headerId = 0; headerId < headerCount; headerId++)
+                {
+                    MapHeader h = MapHeader.GetMapHeader(headerId);
+                    if (h == null) continue;
+
+                    int mapNameIndex = GetMapNameIndex(h);
+
+                    sw.WriteLine(
+                        $"{headerId}," +
+                        $"{h.ScriptFileID}," +
+                        $"{h.EventFileID}," +
+                        $"{mapNameIndex}," +
+                        $"{h.WildPokemon}," +
+                        $"{h.WeatherID}"
+                    );
+                }
+            }
+        }
+
+        private static int GetMapNameIndex(MapHeader h)
+        {
+            // DP stores the location name in two bytes, Pt and HGSS in one.
+            if (h is HeaderDP dp) return dp.LocationName;
+            if (h is HeaderPt pt) return pt.LocationName;
+            if (h is HeaderHGSS hgss) return hgss.LocationName;
+
+            return -1; // should not happen, but keeps export robust
+        }
+
+        private static void ExportEventSpawnablesToCSV(string eventSpawnablesPath)
+        {
+            string eventsDir = RomInfo.GameDirs[DirNames.EventFiles].unpackedDir;
+
+            if (!Directory.Exists(eventsDir))
+                throw new DirectoryNotFoundException($"Event files directory not found: {eventsDir}");
+
+            List<string> files = Directory.GetFiles(eventsDir)
+                .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            using (StreamWriter sw = new StreamWriter(eventSpawnablesPath))
+            {
+                sw.WriteLine("EventFileID,SpawnableIndex,ScriptNumber");
+
+                foreach (string filePath in files)
+                {
+                    string name = Path.GetFileName(filePath);
+
+                    // Event files are typically named "0000", "0001", ...
+                    if (!int.TryParse(name, out int eventFileId))
+                        continue;
+
+                    EventFile ev;
+                    using (FileStream fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read))
+                    {
+                        ev = new EventFile(fs);
+                    }
+
+                    for (int i = 0; i < ev.Spawnables.Count; i++)
+                    {
+                        Spawnable sp = ev.Spawnables[i];
+                        sw.WriteLine($"{eventFileId},{i},{sp.ScriptNumber}");
+                    }
+                }
+            }
+        }
+
+
+        private static void ExportEventOverworldsToCSV(string eventOverworldsPath)
+        {
+            string eventsDir = RomInfo.GameDirs[DirNames.EventFiles].unpackedDir;
+
+            if (!Directory.Exists(eventsDir))
+                throw new DirectoryNotFoundException($"Event files directory not found: {eventsDir}");
+
+            List<string> files = Directory.GetFiles(eventsDir)
+                .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            using (StreamWriter sw = new StreamWriter(eventOverworldsPath))
+            {
+                sw.WriteLine(
+                    "EventFileID,OverworldIndex," +
+                    "OwID,OverlayTableEntry,OwSpriteID,Movement,Type,Flag,ScriptNumber,Orientation,SightRange,Unknown1,Unknown2,XRange,YRange," +
+                    "XMatrix,YMatrix,XMap,YMap,XCoord,YCoord,ZPosition,IsAlias"
+                );
+
+                foreach (string filePath in files)
+                {
+                    string name = Path.GetFileName(filePath);
+
+                    // Event files are typically named "0000", "0001", ...
+                    if (!int.TryParse(name, out int eventFileId))
+                        continue;
+
+                    EventFile ev;
+                    using (FileStream fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read))
+                    {
+                        ev = new EventFile(fs);
+                    }
+
+                    for (int i = 0; i < ev.Overworlds.Count; i++)
+                    {
+                        Overworld ow = ev.Overworlds[i];
+
+                        // Combined coordinates (same scheme used in serialization)
+                        int xCoord = ow.XMapPosition + (MapFile.MapSize * ow.XMatrixPosition);
+                        int yCoord = ow.YMapPosition + (MapFile.MapSize * ow.YMatrixPosition);
+
+                        bool isAlias = ow.ScriptNumber == 0xFFFF;
+
+                        // Match EventEditor.GetOverworldImage(...) logic:
+                        // - If 3D overworld dict contains entry, there is no OWSprites file id.
+                        // - Else use OverworldTable -> (spriteID, properties)
+                        string owSpriteIdStr = "";
+                        if (RomInfo.Ow3DSpriteDict.TryGetValue(ow.OverlayTableEntry, out _))
+                        {
+                            // 3D overworld (image comes from Resources). No OWSprites sprite ID.
+                            owSpriteIdStr = "";
+                        }
+                        else if (RomInfo.OverworldTable.TryGetValue(ow.OverlayTableEntry, out (uint spriteID, ushort properties) result))
+                        {
+                            owSpriteIdStr = result.spriteID.ToString();
+                        }
+                        else
+                        {
+                            // No match; left empty.
+                            owSpriteIdStr = "";
+                        }
+
+                        sw.WriteLine(
+                            $"{eventFileId},{i}," +
+                            $"{ow.OwID},{ow.OverlayTableEntry},{owSpriteIdStr}," +
+                            $"{ow.Movement},{ow.Type},{ow.Flag},{ow.ScriptNumber}," +
+                            $"{ow.Orientation},{ow.SightRange},{ow.Param1},{ow.Param2},{ow.XRange},{ow.YRange}," +
+                            $"{ow.XMatrixPosition},{ow.YMatrixPosition},{ow.XMapPosition},{ow.YMapPosition}," +
+                            $"{xCoord},{yCoord},{ow.ZPosition},{(isAlias ? 1 : 0)}"
+                        );
+                    }
+                }
+            }
+        }
+
+
+        private static void ExportPersonalDataToCSV(string pokePersonalDataPath, string[] pokeNames, string[] abilityNames, string[] typeNames, string[] itemNames)
+        {
+            PokemonPersonalData curPersonalData = null;
+            StreamWriter sw = new StreamWriter(pokePersonalDataPath);
+
+            sw.WriteLine("ID,Name,Type1,Type2,BaseHP,BaseAttack,BaseDefense,BaseSpecialAttack,BaseSpecialDefense,BaseSpeed," +
+                "Ability1,Ability2,Item1,Item2");
+
+            for (int i = 0; i < RomInfo.GetPersonalFilesCount(); i++)
+            {
+                curPersonalData = new PokemonPersonalData(i);
+
+                string type1String = (int)curPersonalData.Type1 < typeNames.Length ? typeNames[(int)curPersonalData.Type1] : "UnknownType_" + (int)curPersonalData.Type1;
+                string type2String = (int)curPersonalData.Type2 < typeNames.Length ? typeNames[(int)curPersonalData.Type2] : "UnknownType_" + (int)curPersonalData.Type2;
+
+                sw.WriteLine($"{i},{pokeNames[i]},{type1String},{type2String}," +
+                    $"{curPersonalData.BaseHP},{curPersonalData.BaseAtk},{curPersonalData.BaseDef}, " +
+                    $"{curPersonalData.BaseSpAtk},{curPersonalData.BaseSpDef},{curPersonalData.BaseSpeed}," +
+                    $"{abilityNames[curPersonalData.FirstAbility]},{abilityNames[curPersonalData.SecondAbility]}," +
+                    $"{itemNames[curPersonalData.Item1]},{itemNames[curPersonalData.Item2]}");
+            }
+
+            sw.Close();
+        }
+
+        private static void ExportLearnsetDataToCSV(string learnsetDataPath, string[] pokeNames, string[] moveNames)
+        {
+            using (StreamWriter sw = new StreamWriter(learnsetDataPath))
+            {
+                sw.Write("ID,Name");
+
+                for (int i = 0; i < 20; i++)
+                {
+                    sw.Write($",LevelMove{i}");
+                }
+
+                sw.WriteLine();
+
+                for (int i = 0; i < RomInfo.GetLearnsetFilesCount(); i++)
+                {
+                    LearnsetData curLearnsetData = new LearnsetData(i);
+
+                    sw.Write($"{i},{pokeNames[i]}");
+
+                    int entryIndex = 0;
+                    foreach ((byte level, ushort move) entry in curLearnsetData.List)
+                    {
+                        if (entryIndex >= 20)
+                            break;
+                        string moveName = moveNames[entry.move];
+
+                        sw.Write($",{entry.level}|{moveName}");
+
+                        entryIndex++;
+                    }
+                    while (entryIndex < 20)
+                    {
+                        sw.Write(",");
+                        entryIndex++;
+                    }
+                    sw.WriteLine();
+                }
+            }
+        }
+
+
+        /// <summary>
+        /// Every learnset given as JSON keyed by SPECIES_ name, each with its level-up moves as MOVE_ names.
+        /// Shared by the docs export and the editors, which pass their own (possibly unsaved) lists.
+        /// </summary>
+        public static string LearnsetJson(IEnumerable<(int Species, IEnumerable<(int Level, int Move)> Moves)> sets)
+        {
+            ScriptDatabase.InitializeMoveNamesIfNeeded();
+            ScriptDatabase.InitializePokemonNamesIfNeeded();
+            string[] pokeNames = RomInfo.GetPokemonNamesWithForms(RomInfo.GetPersonalFilesCount());
+
+            Dictionary<string, object> learnsetJson = new Dictionary<string, object>();
+            foreach ((int Species, IEnumerable<(int Level, int Move)> Moves) set in sets)
+            {
+                int i = set.Species;
+                string speciesName = "SPECIES_UNKNOWN";
+
+                if (ScriptDatabase.PokemonNames.ContainsKey((ushort)i))
+                {
+                    speciesName = $"{ScriptDatabase.PokemonNames[(ushort)i].ToUpper().Replace(" ", "_")}";
+                }
+                else if (i < pokeNames.Length)
+                {
+                    speciesName = $"SPECIES_{pokeNames[i].ToUpper().Replace(" ", "_").Replace("-", "_").Replace("__", "_")}";
+                }
+
+                List<Dictionary<string, object>> levelMoves = new List<Dictionary<string, object>>();
+                foreach ((int Level, int Move) entry in set.Moves)
+                {
+                    if (entry.Move == 0) continue; // Skip empty moves
+
+                    string moveName = "MOVE_UNKNOWN";
+                    if (ScriptDatabase.MoveNames.ContainsKey((ushort)entry.Move))
+                    {
+                        moveName = $"{ScriptDatabase.MoveNames[(ushort)entry.Move].ToUpper().Replace(" ", "_")}";
+                    }
+
+                    levelMoves.Add(new Dictionary<string, object>
+                    {
+                        { "Level", (byte)entry.Level },
+                        { "Move", moveName }
+                    });
+                }
+
+                learnsetJson[speciesName] = new Dictionary<string, object>
+                {
+                    { "LevelMoves", levelMoves }
+                };
+            }
+
+            return Newtonsoft.Json.JsonConvert.SerializeObject(learnsetJson, Newtonsoft.Json.Formatting.Indented);
+        }
+
+        private static void ExportEvolutionDataToCSV(string evolutionDataPath, string[] pokeNames, string[] itemNames, string[] moveNames)
+        {
+            EvolutionFile curEvolutionFile = null;
+            StreamWriter sw = new StreamWriter(evolutionDataPath);
+
+            sw.WriteLine("ID,Name,[Method|Param|Target]");
+
+            for (int i = 0; i < RomInfo.GetEvolutionFilesCount(); i++)
+            {
+                curEvolutionFile = new EvolutionFile(i);
+
+                sw.Write($"{i},{pokeNames[i]}");
+
+                foreach (EvolutionData entry in curEvolutionFile.Data)
+                {
+                    EvolutionParamMeaning meaning = EvolutionFile.EvoDescriptions[entry.Method];
+
+                    string paramString = "";
+
+                    switch (meaning)
+                    {
+                        case EvolutionParamMeaning.Ignored:
+                            paramString = "Ignored";
+                            break;
+                        case EvolutionParamMeaning.FromLevel:
+                            paramString = entry.Param.ToString();
+                            break;
+                        case EvolutionParamMeaning.ItemName:
+                            paramString = itemNames[entry.Param];
+                            break;
+                        case EvolutionParamMeaning.MoveName:
+                            paramString = moveNames[entry.Param];
+                            break;
+                        case EvolutionParamMeaning.PokemonName:
+                            paramString = pokeNames[entry.Param];
+                            break;
+                        case EvolutionParamMeaning.BeautyValue:
+                            paramString = entry.Param.ToString();
+                            break;
+                    }
+                    if (entry.Target == 0)
+                    {
+                        break;
+                    }
+                    sw.Write($",[{entry.Method}|{paramString}|{pokeNames[entry.Target]}]");
+                }
+
+                sw.WriteLine();
+
+            }
+
+            sw.Close();
+        }
+
+        /// <summary>Reads egg move data from the ROM for use by DocTool exports.</summary>
+        private static List<EggMoveEntry> ReadEggMoveDataForDocTool()
+        {
+            return EggMoveData.ReadFromRom();
+        }
+
+        public static bool ExportEggMoveDataToCSV(List<EggMoveEntry> eggMoveData, string filePath, string[] pokeNames, string[] moveNames)
+            => EggMoveCsv.Export(eggMoveData, filePath, pokeNames, moveNames);
+
+        private static void ExportTrainersToText(string trainerDataPath, string[] trainerNames, string[] trainerClassNames, string[] pokeNames, string[] itemNames, string[] moveNames, string[] abilityNames)
+        {
+            TrainerFile curTrainerFile = null;
+            TrainerProperties curTrainerProperties = null;
+            FileStream curTrainerParty = null;
+            StreamWriter sw = new StreamWriter(trainerDataPath);
+
+            int trainerCount = NarcAPI.Narc.MemberCount(RomInfo.GameDirs[DirNames.TrainerProperties].unpackedDir);
+            bool shinyPatch = TrainerShinyPatch.DetectCurrentProject();
+
+            for (int i = 1; i < trainerCount; i++)
+            {
+                string suffix = Path.DirectorySeparatorChar + i.ToString("D4");
+
+                curTrainerProperties = new TrainerProperties((ushort)i,
+                    new FileStream(RomInfo.GameDirs[DirNames.TrainerProperties].unpackedDir + suffix, FileMode.Open, FileAccess.Read));
+
+                curTrainerParty = new FileStream(RomInfo.GameDirs[DirNames.TrainerParty].unpackedDir + suffix, FileMode.Open, FileAccess.Read);
+
+                curTrainerFile = new TrainerFile(curTrainerProperties, curTrainerParty, trainerNames[i]);
+
+                string trainerName = trainerNames[i];
+                string trainerClass = trainerClassNames[curTrainerProperties.TrainerClass];
+                string[] trainerItems = curTrainerProperties.TrainerItems.Select(item => item != 0 ? itemNames[(int)item] : "None").ToArray();
+
+                PartyPokemon[] partyPokemon = new PartyPokemon[curTrainerProperties.PartyCount];
+
+                string[] monNames = new string[partyPokemon.Length];
+                PartyPokemon.GenderAndAbilityFlags[] monFlags = new PartyPokemon.GenderAndAbilityFlags[partyPokemon.Length];
+                string[] items = new string[partyPokemon.Length];
+                int[] levels = new int[partyPokemon.Length];
+                int[] ivs = new int[partyPokemon.Length];
+                string[][] moves = new string[partyPokemon.Length][];
+
+                for (int j = 0; j < partyPokemon.Length; j++)
+                {
+                    // Assumes the filled slots come first, as the game stores them.
+                    partyPokemon[j] = curTrainerFile.Party[j];
+                    // Type cast can be done because CountNonEmptyMons() only returns non-empty mons i.e. mons with non-null pokeID
+                    monNames[j] = pokeNames[(int)partyPokemon[j].PokeID];
+                    monFlags[j] = partyPokemon[j].GenderAndAbility;
+
+                    if (partyPokemon[j].HeldItem != null)
+                    {
+                        items[j] = itemNames[(int)partyPokemon[j].HeldItem];
+                    }
+                    else
+                    {
+                        items[j] = "None";
+                    }
+
+                    levels[j] = partyPokemon[j].Level;
+                    ivs[j] = partyPokemon[j].Difficulty * 31 / 255;
+
+                    if (partyPokemon[j].Moves == null)
+                    {
+                        LearnsetData learnset = new LearnsetData((int)partyPokemon[j].PokeID);
+                        moves[j] = learnset.GetLearnsetAtLevel(levels[j]).Select(move => moveNames[move]).ToArray();
+                    }
+                    else
+                    {
+                        moves[j] = partyPokemon[j].Moves.Select(move => moveNames[move]).ToArray();
+                    }
+
+                }
+
+                string[] monGenders = new string[partyPokemon.Length];
+                string[] abilities = new string[partyPokemon.Length];
+                string[] natures = new string[partyPokemon.Length];
+
+                SetMonGendersAndAbilitiesAndNature(i, curTrainerProperties.TrainerClass, partyPokemon, monFlags, ref abilityNames, ref monGenders, ref abilities, ref natures, shinyPatch);
+
+
+                sw.Write(TrainerToDocFormat(i, trainerName, trainerClass, trainerItems, monNames, monGenders, items, abilities, levels, natures, ivs, moves));
+            }
+
+            sw.Close();
+
+        }
+
+        private static void ExportMoveDataToCSV(string moveDataPath, string[] moveNames, string[] typeNames)
+        {
+            StreamWriter sw = new StreamWriter(moveDataPath);
+
+            string[] moveFlags = Enum.GetNames(typeof(MoveData.MoveFlags));
+            string[] battleSeqDesc = PokeDatabase.MoveData.BattleSequenceDescriptions;
+
+            sw.WriteLine("Move ID,Move Name,Move Type,Move Split,Power,Accuracy,Priority,Side Effect Probability,PP,Range,Flags,Effect Description");
+
+            for (int i = 0; i < moveNames.Length; i++)
+            {
+                MoveData curMoveDataFile = new MoveData(i);
+
+                // The set flags, skipping the no-flags entry.
+                string moveFlagsString = string.Join("|", moveFlags.Skip(1).Select((flag, index)
+                    => (curMoveDataFile.FlagField & (1 << index)) != 0 ? flag : "").Where(flag => !string.IsNullOrEmpty(flag)));
+
+                string attackRangeString = MoveData.GetAttackRangeName(curMoveDataFile.Target);
+
+                string battleSeqDescString = curMoveDataFile.Battleeffect < battleSeqDesc.Length ?
+                    battleSeqDesc[curMoveDataFile.Battleeffect] : "UnknownEffect_" + curMoveDataFile.Battleeffect;
+
+                string typeString = (int)curMoveDataFile.Movetype < typeNames.Length ?
+                    typeNames[(int)curMoveDataFile.Movetype] : "UnknownType_" + (int)curMoveDataFile.Movetype;
+
+                sw.WriteLine($"{i},{moveNames[i]},{typeString},{curMoveDataFile.Split}," +
+                             $"{curMoveDataFile.Damage},{curMoveDataFile.Accuracy},{curMoveDataFile.Priority}," +
+                             $"{curMoveDataFile.SideEffectProbability},{curMoveDataFile.Pp}," +
+                             $"{attackRangeString},[{moveFlagsString}],{battleSeqDescString}");
+            }
+
+            sw.Close();
+        }
+
+        private static void ExportTMHMDataToCSV(string THHMDataPath, string[] pokeNames)
+        {
+            PokemonPersonalData curPersonalData = null;
+            StreamWriter sw = new StreamWriter(THHMDataPath);
+
+            sw.Write("ID,Name");
+
+            string[] machineMoveNames = TMEditor.ReadMachineMoveNames();
+            int totalTMs = PokemonPersonalData.TmsCount + PokemonPersonalData.HmsCount;
+
+            for (int i = 0; i < totalTMs; i++)
+            {
+                string currentItem = TMEditor.MachineLabelFromIndex(i);
+                sw.Write($",{currentItem} - {machineMoveNames[i]}");
+
+            }
+
+            sw.WriteLine();
+
+            for (int i = 0; i < RomInfo.GetPersonalFilesCount(); i++)
+            {
+                curPersonalData = new PokemonPersonalData(i);
+                sw.Write($"{i},{pokeNames[i]},[");
+
+                for (byte b = 0; b < totalTMs; b++)
+                {
+                    sw.Write(b == 0 ? "" : ",");
+                    sw.Write(curPersonalData.Machines.Contains(b) ? "true" : "false");
+                }
+
+                sw.WriteLine("]");
+
+            }
+            sw.Close();
+        }
+
+        private static string TrainerToDocFormat(int index, string trainerName, string trainerClass, string[] trainerItems, string[] monNames, string[] monGenders, string[] items, string[] abilities,
+                       int[] levels, string[] natures, int[] ivs, string[][] moves)
+        {
+            StringBuilder sb = new StringBuilder();
+
+            sb.Append($"[{index}] {trainerClass} {trainerName}");
+
+            // If trainer has at least one item then list all non-zero id items behind the trainer name
+            if (trainerItems.Length > 0 && trainerItems[0] != "None")
+            {
+                sb.Append(" @ (");
+                sb.Append(string.Join(", ", trainerItems.Where(item => item != "None")));
+                sb.Append(")");
+            }
+
+            sb.Append(":\n\n");
+
+            for (int i = 0; i < monNames.Length; i++)
+            {
+                sb.Append(MonToShowdownFormat(monNames[i], monGenders[i], items[i], abilities[i], levels[i], natures[i], ivs[i], moves[i]));
+                sb.Append("\n\n");
+            }
+
+            sb.Append("\n\n\n");
+
+            return sb.ToString();
+        }
+
+        private static string MonToShowdownFormat(string monName, string gender, string itemName, string ability,
+            int level, string nature, int ivs, string[] moves)
+        {
+            StringBuilder sb = new StringBuilder();
+
+            sb.Append($"{monName}");
+
+            if (gender != "random")
+            {
+                sb.Append($" ({gender})");
+            }
+
+            if (itemName != "None")
+            {
+                sb.Append($" @ {itemName}");
+            }
+
+            sb.Append("\nAbility: " + ability);
+            sb.Append("\nLevel: " + level);
+            sb.Append("\n" + nature + " Nature");
+
+            sb.Append("\nIVs: " + string.Join(" / ", Enumerable.Repeat(ivs.ToString(), 6)));
+
+            moves = moves.Where(move => (move != "None" && move != "-")).ToArray();
+
+            sb.Append("\n- " + string.Join("\n- ", moves));
+
+            return sb.ToString();
+
+        }
+
+        private static void SetMonGendersAndAbilitiesAndNature(int trainerID, int trainerClassID, PartyPokemon[] partyPokemon,
+            PartyPokemon.GenderAndAbilityFlags[] monFlags, ref string[] abilityNames,
+            ref string[] monGenders, ref string[] abilities, ref string[] natures, bool shinyPatch)
+        {
+            bool trainerMale = false;
+
+            trainerMale = DVCalculator.TrainerClassGender.GetTrainerClassGender(trainerClassID);
+            DVCalculator.ResetGenderMod(trainerMale);
+
+            for (int j = 0; j < partyPokemon.Length; j++)
+            {
+
+                byte baseGenderRatio = new PokemonPersonalData((int)partyPokemon[j].PokeID).GenderVec;
+                byte genderOverride = (byte)((byte)monFlags[j] & 0x0F);
+                byte abilityOverride = (byte)TrainerShinyPatch.AbilityOverride((byte)monFlags[j], shinyPatch);
+
+                uint PID = DVCalculator.GeneratePID((uint)trainerID, (uint)trainerClassID, (uint)partyPokemon[j].PokeID, (byte)partyPokemon[j].Level, baseGenderRatio, genderOverride, abilityOverride, partyPokemon[j].Difficulty);
+                natures[j] = DVCalculator.Natures[DVCalculator.GetNatureFromPID(PID)].Split(':')[0];
+
+                switch (genderOverride)
+                {
+                    case 0: // Random
+                        monGenders[j] = "random";
+                        break;
+                    case 1: // Male
+                        monGenders[j] = "M";
+                        break;
+                    case 2: // Female
+                        monGenders[j] = "F";
+                        break;
+                }
+
+                switch (PID % 2) // Lowest bit of PID determines the ability
+                {
+                    case 0:
+                        abilities[j] = abilityNames[new PokemonPersonalData((int)partyPokemon[j].PokeID).FirstAbility];
+                        break;
+                    case 1:
+                        abilities[j] = abilityNames[new PokemonPersonalData((int)partyPokemon[j].PokeID).SecondAbility];
+                        break;
+                }
+            }
+        }
+    }
+}

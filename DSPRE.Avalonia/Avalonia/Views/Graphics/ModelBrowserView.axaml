@@ -1,0 +1,230 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:controls="clr-namespace:DSPRE.Avalonia.Controls"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:DSPRE.Avalonia.ViewModels.Graphics"
+        xmlns:vmc="clr-namespace:DSPRE.Avalonia.ViewModels.Controls"
+        xmlns:gl="clr-namespace:DSPRE.Avalonia.Gl"
+        x:Class="DSPRE.Avalonia.Views.Graphics.ModelBrowserView"
+        x:DataType="vm:ModelBrowserViewModel"
+        Title="All models and textures"
+        Width="980" Height="720" MinWidth="560" MinHeight="420"
+        WindowStartupLocation="CenterScreen">
+  <Design.DataContext>
+    <vm:ModelBrowserViewModel/>
+  </Design.DataContext>
+
+  <DockPanel>
+
+    <controls:EditorToolbar>
+        <TextBox PlaceholderText="Search" x:Name="SearchBox" controls:EditorToolbar.Slot="Picker"
+                 Text="{Binding Search}" FontSize="13" Width="340">
+          <TextBox.InnerRightContent>
+            <Button controls:Icon.Key="Cross" Click="ClearSearch_Click" Padding="8,2" Margin="0,0,2,0"
+                    Background="Transparent" BorderThickness="0"
+                    ToolTip.Tip="Empty the search box"
+                    IsVisible="{Binding Search, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+          </TextBox.InnerRightContent>
+        </TextBox>
+        <Button Content="Save" controls:Icon.Key="saveButton" Click="Save_Click" IsEnabled="{Binding HasUnsavedChanges}"/>
+        <Button Content="Discard" controls:Icon.Key="resetIcon" Click="Discard_Click" IsEnabled="{Binding HasUnsavedChanges}"/>
+        <controls:UndoRedoButtons/>
+        <StackPanel x:Name="FileButtons" Orientation="Horizontal" Spacing="6" Margin="12,2,6,2">
+          <Button Content="Import…" controls:Icon.Key="import" Click="PutIn_Click"
+                  IsEnabled="{Binding CanPutFileIn}" ToolTip.Tip="{Binding PutFileInHelp}"/>
+          <Button Content="Export DAE…" controls:Icon.Key="export" Click="SaveDae_Click"
+                  IsEnabled="{Binding CanSaveModel}" ToolTip.Tip="{Binding SaveModelHelp}"/>
+          <Button Content="Export glTF…" controls:Icon.Key="export" Click="SaveGlb_Click"
+                  IsEnabled="{Binding CanSaveModel}" ToolTip.Tip="{Binding SaveModelHelp}"/>
+          <Button Content="Export file…" controls:Icon.Key="export" Click="SaveRaw_Click"
+                  IsEnabled="{Binding HasSelection}"
+                  ToolTip.Tip="The whole entry exactly as it sits in the ROM, keeping everything a 3D file would drop."/>
+        </StackPanel>
+    </controls:EditorToolbar>
+
+    <Border DockPanel.Dock="Bottom" Padding="8,6" Background="{DynamicResource Editor.StatusBg}">
+      <Grid ColumnDefinitions="*,8,Auto">
+        <StackPanel Grid.Column="0" Spacing="4" VerticalAlignment="Center">
+          <TextBlock Text="{Binding FoundSummary}" FontSize="12" TextWrapping="Wrap"
+                     Foreground="{DynamicResource Editor.Subtle}"/>
+          <TextBlock Text="{Binding StatusText}" FontSize="11" TextWrapping="Wrap"
+                     Foreground="{DynamicResource Editor.Subtle}"/>
+        </StackPanel>
+      </Grid>
+    </Border>
+
+    <Grid ColumnDefinitions="280,6,*,6,300" Margin="6">
+
+      <DockPanel Grid.Column="0">
+        <!-- One tab per kind of 3D thing, so the models are not mixed in with the picture sets and the
+             animations when you are only after one of them. -->
+        <ListBox x:Name="CategoryList" DockPanel.Dock="Top" ItemsSource="{Binding Tabs}" SelectedItem="{Binding SelectedTab}"
+                 Background="Transparent" BorderThickness="0" Margin="0,0,0,6" MaxHeight="120"
+                 ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+          <ListBox.ItemsPanel>
+            <ItemsPanelTemplate><WrapPanel Orientation="Horizontal"/></ItemsPanelTemplate>
+          </ListBox.ItemsPanel>
+          <ListBox.Styles>
+            <Style Selector="ListBoxItem">
+              <Setter Property="Padding" Value="8,3"/>
+              <Setter Property="Margin" Value="0,0,3,3"/>
+              <Setter Property="CornerRadius" Value="3"/>
+            </Style>
+          </ListBox.Styles>
+          <ListBox.ItemTemplate>
+            <DataTemplate x:DataType="vm:ModelBrowserViewModel+CategoryTab">
+              <TextBlock Text="{Binding Header}" FontSize="12" ToolTip.Tip="{Binding What}"/>
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
+
+        <ListBox x:Name="ItemList" ItemsSource="{Binding Shown}" SelectedItem="{Binding Selected}">
+          <ListBox.ItemTemplate>
+            <DataTemplate x:DataType="vm:ModelBrowserViewModel+Item">
+              <TextBlock Text="{Binding Label}" FontFamily="Consolas,monospace" FontSize="13"/>
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
+      </DockPanel>
+
+      <GridSplitter Grid.Column="1" Width="6" Background="Transparent"/>
+
+      <Border Grid.Column="2" x:Name="GlHost" Background="{DynamicResource Editor.PanelBg}"
+              BorderBrush="{DynamicResource Editor.Border}" BorderThickness="1">
+        <Panel>
+          <gl:NsbmdGlControl x:Name="GlView" IsVisible="{Binding HasModel}"/>
+          <Border Background="#707070" IsVisible="{Binding HasTexturePreview}" Padding="24">
+            <Image Source="{Binding TexturePreview}" Stretch="Uniform"/>
+          </Border>
+          <TextBlock Text="{Binding Whynot}" IsVisible="{Binding HasNoModel}"
+                     TextWrapping="Wrap" MaxWidth="420" FontSize="13" TextAlignment="Center"
+                     HorizontalAlignment="Center" VerticalAlignment="Center" Margin="24"
+                     Foreground="{DynamicResource Editor.Subtle}"/>
+        </Panel>
+      </Border>
+
+      <GridSplitter Grid.Column="3" Width="6" Background="Transparent"/>
+
+      <ScrollViewer x:Name="SidePanel" Grid.Column="4" HorizontalScrollBarVisibility="Disabled">
+        <StackPanel Spacing="8" Margin="2,0,0,0">
+
+          <!-- An overworld's model, pictures and movement are filed together, so they share one row. -->
+          <ListBox ItemsSource="{Binding Parts}" SelectedIndex="{Binding PartIndex, Mode=TwoWay}"
+                   IsVisible="{Binding HasParts}" Background="Transparent" BorderThickness="0"
+                   MaxHeight="72" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+            <ListBox.ItemsPanel>
+              <ItemsPanelTemplate><WrapPanel Orientation="Horizontal"/></ItemsPanelTemplate>
+            </ListBox.ItemsPanel>
+            <ListBox.Styles>
+              <Style Selector="ListBoxItem">
+                <Setter Property="Padding" Value="8,3"/>
+                <Setter Property="Margin" Value="0,0,3,3"/>
+                <Setter Property="CornerRadius" Value="3"/>
+              </Style>
+            </ListBox.Styles>
+            <ListBox.ItemTemplate>
+              <DataTemplate x:DataType="vm:ModelBrowserViewModel+Part">
+                <TextBlock Text="{Binding Label}" FontSize="12"/>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+
+            <StackPanel Spacing="2" IsVisible="{Binding HasPreviewTextureChoice}">
+              <TextBlock Text="Texture" FontSize="12" Foreground="{DynamicResource Editor.Subtle}"/>
+              <ComboBox ItemsSource="{Binding PreviewTextureNames}"
+                        SelectedIndex="{Binding PreviewTextureIndex, Mode=TwoWay}"
+                        HorizontalAlignment="Stretch" FontSize="12"/>
+            </StackPanel>
+
+            <StackPanel Spacing="2" IsVisible="{Binding HasPreviewPaletteChoice}">
+              <TextBlock Text="Palette" FontSize="12" Foreground="{DynamicResource Editor.Subtle}"/>
+              <ComboBox ItemsSource="{Binding PreviewPaletteNames}"
+                        SelectedIndex="{Binding PreviewPaletteIndex, Mode=TwoWay}"
+                        HorizontalAlignment="Stretch" FontSize="12"/>
+            </StackPanel>
+
+            <StackPanel Spacing="2" IsVisible="{Binding HasTextureChoice}">
+              <TextBlock Text="Texture set" FontSize="12" Foreground="{DynamicResource Editor.Subtle}"/>
+              <ComboBox ItemsSource="{Binding TextureChoices}" SelectedIndex="{Binding TextureChoice, Mode=TwoWay}"
+                        HorizontalAlignment="Stretch" FontSize="12"
+                        ToolTip.Tip="Pick a texture set to see the model with it"/>
+            </StackPanel>
+
+            <StackPanel Spacing="2" IsVisible="{Binding HasAnimationChoice}">
+              <TextBlock Text="Movement" FontSize="12" Foreground="{DynamicResource Editor.Subtle}"/>
+              <ComboBox ItemsSource="{Binding AnimationChoices}" SelectedIndex="{Binding AnimationIndex, Mode=TwoWay}"
+                        HorizontalAlignment="Stretch" FontSize="12"
+                        ToolTip.Tip="Which animation to play on this model."/>
+            </StackPanel>
+
+            <StackPanel Spacing="2" IsVisible="{Binding HasSlideChoice}">
+              <TextBlock Text="Sliding picture" FontSize="12" Foreground="{DynamicResource Editor.Subtle}"/>
+              <ComboBox ItemsSource="{Binding SlideChoices}" SelectedItem="{Binding SlideChoiceName, Mode=TwoWay}"
+                        HorizontalAlignment="Stretch" FontSize="12"
+                        ToolTip.Tip="A picture that slides, turns or stretches across the model, like flowing water."/>
+            </StackPanel>
+
+            <StackPanel Spacing="2" IsVisible="{Binding HasSwapChoice}">
+              <TextBlock Text="Swapped picture" FontSize="12" Foreground="{DynamicResource Editor.Subtle}"/>
+              <ComboBox ItemsSource="{Binding SwapChoices}" SelectedItem="{Binding SwapChoiceName, Mode=TwoWay}"
+                        HorizontalAlignment="Stretch" FontSize="12"
+                        ToolTip.Tip="A picture swapped for another as it goes, like a flickering sign."/>
+            </StackPanel>
+
+            <StackPanel Spacing="2" IsVisible="{Binding HasColourChoice}">
+              <TextBlock Text="Colour" FontSize="12" Foreground="{DynamicResource Editor.Subtle}"/>
+              <ComboBox ItemsSource="{Binding ColourChoices}" SelectedItem="{Binding ColourChoiceName, Mode=TwoWay}"
+                        HorizontalAlignment="Stretch" FontSize="12"
+                        ToolTip.Tip="A material fading or changing colour over time."/>
+            </StackPanel>
+
+            <StackPanel Spacing="2" IsVisible="{Binding HasShowingChoice}">
+              <TextBlock Text="Hidden parts" FontSize="12" Foreground="{DynamicResource Editor.Subtle}"/>
+              <ComboBox ItemsSource="{Binding ShowingChoices}" SelectedItem="{Binding ShowingChoiceName, Mode=TwoWay}"
+                        HorizontalAlignment="Stretch" FontSize="12"
+                        ToolTip.Tip="Parts of the model that are hidden and shown."/>
+            </StackPanel>
+
+          <WrapPanel x:Name="PlayBar" Classes="toolbar" Orientation="Horizontal">
+            <Button Content="{Binding PlayLabel}" Click="Play_Click"
+                    IsEnabled="{Binding CanPlay}" ToolTip.Tip="{Binding PlayHelp}"/>
+            <TextBlock Text="{Binding FrameSummary}" VerticalAlignment="Center" Margin="8,0,0,0"
+                       FontSize="12" Foreground="{DynamicResource Editor.Subtle}"/>
+          </WrapPanel>
+
+          <Slider Minimum="0" Maximum="{Binding FrameCount}" Value="{Binding Frame, Mode=TwoWay}"
+                  IsVisible="{Binding CanPlay}" TickFrequency="1" IsSnapToTickEnabled="True"
+                  ToolTip.Tip="Which frame to show."/>
+
+          <Separator/>
+
+          <TextBlock Text="{Binding Details}" FontSize="13" TextWrapping="Wrap"
+                     IsVisible="{Binding Details, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+          <ItemsControl ItemsSource="{Binding Facts}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="vmc:DetailFact">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <TextBlock Text="{Binding Name}" Width="80" Foreground="{DynamicResource Editor.Subtle}"/>
+                  <TextBlock Text="{Binding Value}"/>
+                </StackPanel>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+          <TextBlock Text="{Binding CompanionSummary}" IsVisible="{Binding HasCompanionSummary}"
+                     FontSize="12" TextWrapping="Wrap" Foreground="{DynamicResource Editor.Subtle}"/>
+          <TextBlock Text="{Binding CompanionNote}" IsVisible="{Binding HasCompanionNote}"
+                     FontSize="12" TextWrapping="Wrap" Foreground="{DynamicResource Editor.Subtle}"/>
+          <TextBlock Text="{Binding AnimationDetails}" IsVisible="{Binding HasAnimationDetails}"
+                     FontSize="12" TextWrapping="Wrap"/>
+          <TextBlock Text="{Binding AnimationOwner}" IsVisible="{Binding HasAnimationDetails}"
+                     FontSize="12" TextWrapping="Wrap" Foreground="{DynamicResource Editor.Subtle}"/>
+          <TextBlock Text="{Binding MovementNote}" IsVisible="{Binding HasMovementNote}"
+                     FontSize="12" TextWrapping="Wrap" Foreground="{DynamicResource Editor.Subtle}"/>
+          <Button Content="{Binding OpenDeepEditorLabel}" controls:Icon.Key="OpenLink" Click="OpenDeepEditor_Click"
+                  IsVisible="{Binding HasDeepEditor}" HorizontalAlignment="Left"/>
+
+        </StackPanel>
+      </ScrollViewer>
+
+    </Grid>
+  </DockPanel>
+</Window>

@@ -1,0 +1,341 @@
+using System;
+using System.Collections.Generic;
+using System.Collections.ObjectModel;
+using System.ComponentModel;
+using System.IO;
+using System.Linq;
+using System.Runtime.CompilerServices;
+using System.Text.RegularExpressions;
+using Avalonia.Controls;
+using Avalonia.Media;
+using Avalonia.Media.Imaging;
+using Avalonia.Threading;
+using DSPRE.Avalonia.BattleAnim.Particles;
+using DSPRE.Avalonia.Data;
+using IEditorWithUnsavedChanges = global::DSPRE.Editors.IEditorWithUnsavedChanges;
+
+namespace DSPRE.Avalonia.ViewModels.Graphics
+{
+    /// <summary>One setting of the chosen emitter, in display units.</summary>
+    public sealed class ParticleFieldRow : INotifyPropertyChanged
+    {
+        public event PropertyChangedEventHandler PropertyChanged;
+
+        private readonly ParticleEditorViewModel _owner;
+        public SpaField Field { get; }
+
+        internal ParticleFieldRow(ParticleEditorViewModel owner, SpaField field) { _owner = owner; Field = field; }
+
+        public string Group => ParticleEditorViewModel.Words(Field.Block.ToString());
+        public string Label => ParticleEditorViewModel.Words(Field.Name);
+
+        public bool IsColor => Field.Kind == SpaFieldKind.Color;
+        public bool IsFlag => !IsColor && (Field.Kind == SpaFieldKind.Flag || Field.Bits == 1);
+        public bool IsNumber => !IsColor && !IsFlag;
+        public bool CanEdit => !Field.DecidesLayout;
+        public string LockedNote => Field.DecidesLayout ? "Decides which parts this emitter has" : null;
+
+        public decimal Minimum => (decimal)(Field.MinRaw / Field.Divisor);
+        public decimal Maximum => (decimal)(Field.MaxRaw / Field.Divisor);
+        // Whole steps for pixels and degrees, 0.05 for scales and ratios.
+        public decimal Step => Field.Divisor <= 1 || Field.Divisor < 1000 ? 1m : 0.05m;
+        public string Format => Field.Divisor <= 1 ? "0" : "0.###";
+
+        private long Raw => _owner.Raw(Field);
+
+        public decimal? Value
+        {
+            get => (decimal)(Raw / Field.Divisor);
+            set { if (value != null) _owner.Write(this, (long)Math.Round((double)value.Value * Field.Divisor)); }
+        }
+
+        public bool IsOn
+        {
+            get => Raw != 0;
+            set => _owner.Write(this, value ? 1 : 0);
+        }
+
+        public IBrush Swatch
+        {
+            get { (byte r, byte g, byte b) = SpaFields.ToRgb888(Raw); return new SolidColorBrush(Color.FromRgb(r, g, b)); }
+        }
+
+        public string ColorText { get { (byte r, byte g, byte b) = SpaFields.ToRgb888(Raw); return $"{r}, {g}, {b}"; } }
+
+        public void SetColour(byte r, byte g, byte b) => _owner.Write(this, SpaFields.FromRgb888(r, g, b));
+
+        internal void Refresh()
+        {
+            foreach (string n in new[] { nameof(Value), nameof(IsOn), nameof(Swatch), nameof(ColorText) })
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(n));
+        }
+    }
+
+    public sealed class ParticleTextureRow
+    {
+        public int Index { get; init; }
+        public Bitmap Picture { get; init; }
+        public string Info { get; init; }
+        public string CannotReplace { get; init; }
+        public bool CanReplace => CannotReplace == null;
+        internal byte[] Rgba { get; init; }
+        internal int Width { get; init; }
+        internal int Height { get; init; }
+    }
+
+    /// <summary>Edits a particle file with a live preview; layout fields are locked so the file keeps its size.</summary>
+    public sealed class ParticleEditorViewModel : INotifyPropertyChanged, IEditorWithUnsavedChanges, ISupportsUndo
+    {
+        public event PropertyChangedEventHandler PropertyChanged;
+        private void OnPropertyChanged([CallerMemberName] string n = null) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(n));
+        private bool Set<T>(ref T f, T v, [CallerMemberName] string n = null)
+        {
+            if (EqualityComparer<T>.Default.Equals(f, v)) return false;
+            f = v; OnPropertyChanged(n); return true;
+        }
+
+        public ObservableCollection<string> EmitterNames { get; } = new();
+        public ObservableCollection<ParticleFieldRow> Fields { get; } = new();
+        public ObservableCollection<ParticleTextureRow> Textures { get; } = new();
+
+        private readonly ArchiveFiles _source;
+        private readonly int _entry;
+        public ArchiveFiles Source => _source;
+        public int Entry => _entry;
+        private readonly Action<int> _changed;
+        private readonly bool _orthographic;
+        private byte[] _saved;
+        private SpaDocument _doc;
+        private SplScene _preview;
+        private DispatcherTimer _timer;
+        private int _restWait;
+
+        public string Title { get; } = "Particles";
+
+        public ParticleEditorViewModel() { if (!Design.IsDesignMode) return; }
+
+        public ParticleEditorViewModel(ArchiveFiles source, int entry, string what, Action<int> changed, bool orthographic = false)
+        {
+            _source = source;
+            _orthographic = orthographic;
+            _entry = entry;
+            _changed = changed;
+            _saved = source.Get(entry) ?? throw new InvalidOperationException($"Particle file {entry} isn't there.");
+            if (!SpaDocument.TryLoad(_saved, out _doc, out string why))
+                throw new InvalidOperationException(why);
+
+            Title = $"Particles: {what} (file {entry})";
+            for (int i = 0; i < _doc.EmitterCount; i++) EmitterNames.Add($"Emitter {i + 1}");
+            _emitterIndex = _doc.EmitterCount > 0 ? 0 : -1;
+            RebuildFields();
+            RebuildTextures();
+            Replay();
+            StartUndo();
+
+            _timer = new DispatcherTimer(TimeSpan.FromMilliseconds(1000.0 / 30), DispatcherPriority.Render, (_, _) => Tick());
+            _timer.Start();
+        }
+
+        private int _emitterIndex = -1;
+        public int EmitterIndex
+        {
+            get => _emitterIndex;
+            set { if (value >= 0 && value < EmitterNames.Count && Set(ref _emitterIndex, value)) { RebuildFields(); if (_onlySelected) Replay(); } }
+        }
+
+        private bool _onlySelected;
+        public bool OnlySelected { get => _onlySelected; set { if (Set(ref _onlySelected, value)) Replay(); } }
+
+        private string _filter = "";
+        public string FieldFilter { get => _filter; set { if (Set(ref _filter, value ?? "")) RebuildFields(); } }
+
+        private Bitmap _frame;
+        public Bitmap Frame { get => _frame; private set => Set(ref _frame, value); }
+
+        private string _status = "";
+        public string StatusText { get => _status; set => Set(ref _status, value); }
+
+        public bool HasUnsavedChanges => _doc != null && _saved != null && !_doc.ToBytes().AsSpan().SequenceEqual(_saved);
+
+        private ByteStateUndo _undo;
+        public bool CanUndo => _undo?.CanUndo == true;
+        public bool CanRedo => _undo?.CanRedo == true;
+        public void Undo() => _undo?.Undo();
+        public void Redo() => _undo?.Redo();
+
+        private void StartUndo()
+        {
+            _undo = new ByteStateUndo(() => _doc.ToBytes(), ApplyState, () => { OnPropertyChanged(nameof(CanUndo)); OnPropertyChanged(nameof(CanRedo)); });
+            OnPropertyChanged(nameof(CanUndo)); OnPropertyChanged(nameof(CanRedo));
+        }
+
+        private void ApplyState(byte[] state)
+        {
+            _doc = SpaDocument.Load(state);
+            foreach (ParticleFieldRow row in Fields) row.Refresh();
+            RebuildTextures();
+            Replay();
+            OnPropertyChanged(nameof(HasUnsavedChanges));
+        }
+
+        private void Edited()
+        {
+            OnPropertyChanged(nameof(HasUnsavedChanges));
+            _undo?.Record();
+        }
+        public string UnsavedChangesDescription => Title;
+
+        internal static string Words(string pascal)
+        {
+            string s = Regex.Replace(pascal ?? "", "(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", " ");
+            return s.Length > 1 ? s[0] + s.Substring(1).ToLowerInvariant() : s;
+        }
+
+        internal long Raw(SpaField field) => _emitterIndex >= 0 && _doc.Has(_emitterIndex, field) ? _doc.GetRaw(_emitterIndex, field) : 0;
+
+        internal void Write(ParticleFieldRow row, long raw)
+        {
+            if (_emitterIndex < 0 || row.Field.DecidesLayout) return;
+            raw = Math.Clamp(raw, row.Field.MinRaw, row.Field.MaxRaw);
+            if (Raw(row.Field) == raw) return;
+            try
+            {
+                _doc.SetRaw(_emitterIndex, row.Field, raw);
+                Edited();
+                StatusText = $"{row.Label} changed.";
+                Replay();
+            }
+            catch (Exception ex) { StatusText = ex.Message; }
+            row.Refresh();
+        }
+
+        private void RebuildFields()
+        {
+            Fields.Clear();
+            if (_emitterIndex < 0) return;
+            foreach (SpaField field in SpaFields.All)
+            {
+                if (!_doc.Has(_emitterIndex, field)) continue;
+                ParticleFieldRow row = new ParticleFieldRow(this, field);
+                if (_filter.Length > 0 && !SearchMatch.Contains(row.Label, _filter) && !SearchMatch.Contains(row.Group, _filter)) continue;
+                Fields.Add(row);
+            }
+        }
+
+        private void RebuildTextures()
+        {
+            Textures.Clear();
+            SpaArchive arc = _doc.Parse();
+            for (int i = 0; i < _doc.TextureCount; i++)
+            {
+                SpaTextureInfo info = _doc.GetTextureInfo(i);
+                SpaTexture tex = i < arc.Textures.Count ? arc.Textures[i] : null;
+                Textures.Add(new ParticleTextureRow
+                {
+                    Index = i,
+                    Picture = tex?.Rgba != null ? ImageConverter.FromRgba(tex.Rgba, tex.Width, tex.Height) : null,
+                    Info = $"Texture {i + 1}: {info.Width} by {info.Height}, {SpaTextureEncoder.FormatName(info.Format)}"
+                         + (info.PaletteColors > 0 ? $", {info.PaletteColors} colours" : ""),
+                    CannotReplace = info.CannotReplace,
+                    Rgba = tex?.Rgba, Width = tex?.Width ?? 0, Height = tex?.Height ?? 0,
+                });
+            }
+        }
+
+        // ── playback ───────────────────────────────────────────────────────────────────────────
+
+        // Where the emitters sit: 14 pixels below the middle of the 256 by 192 preview.
+        private const int AnchorY = -14 * SplScene.FxPerPixel;
+
+        public void Replay()
+        {
+            _preview = new SplScene();
+            _restWait = 0;
+            SplManager mgr = _preview.Add(_doc.ToBytes(), new SplRandom(BattleAnimPlayer.DefaultSeed), _orthographic);
+            if (mgr == null) { StatusText = "This file can't be played."; return; }
+            for (int i = 0; i < mgr.Resources.Count; i++)
+            {
+                if (_onlySelected && i != _emitterIndex) continue;
+                mgr.CreateEmitter(i, e => e.SetPos(0, AnchorY, 0));
+            }
+        }
+
+        private void Tick()
+        {
+            if (_preview == null) return;
+            if (!_preview.Active)
+            {
+                // A short rest between plays, so the end of an effect can be seen.
+                if (++_restWait >= 20) Replay();
+                return;
+            }
+            Frame = _preview.Step();
+        }
+
+        public void Stop() => _timer?.Stop();
+
+        // ── textures ───────────────────────────────────────────────────────────────────────────
+
+        public string ReplaceTexture(int index, string path, out bool ok)
+        {
+            ok = false;
+            byte[] file;
+            try { file = File.ReadAllBytes(path); }
+            catch (Exception ex) { return StatusText = "That file couldn't be read: " + ex.Message; }
+            if (!AnyPng.TryReadRgba(file, out byte[] rgba, out int w, out int h, out string whynot))
+                return StatusText = whynot ?? "That file isn't a readable PNG.";
+
+            SpaTextureImport result = _doc.ReplaceTexture(index, w, h, rgba);
+            if (!result.Succeeded) return StatusText = result.Error;
+
+            Edited();
+            RebuildTextures();
+            Replay();
+            ok = true;
+            return StatusText = result.Quantized
+                ? $"Reduced from {result.SourceColors} to {result.PaletteColorsUsed} colours to fit."
+                : "";
+        }
+
+        public string ExportTexture(int index, string path)
+        {
+            ParticleTextureRow row = Textures.FirstOrDefault(t => t.Index == index);
+            if (row?.Rgba == null) return StatusText = "This texture can't be exported.";
+            try
+            {
+                using Bitmap bmp = ImageConverter.FromRgba(row.Rgba, row.Width, row.Height);
+                bmp.Save(path);
+                return null;
+            }
+            catch (Exception ex) { return StatusText = "Couldn't save: " + ex.Message; }
+        }
+
+        // ── saving ─────────────────────────────────────────────────────────────────────────────
+
+        public void SaveChanges()
+        {
+            if (!HasUnsavedChanges) return;
+            try
+            {
+                byte[] bytes = _doc.ToBytes();
+                _source.Put(new Dictionary<int, byte[]> { [_entry] = bytes });
+                _saved = bytes;
+                OnPropertyChanged(nameof(HasUnsavedChanges));
+                StatusText = "Saved.";
+                _changed?.Invoke(_entry);
+            }
+            catch (Exception ex) { StatusText = "Couldn't save: " + ex.Message; }
+        }
+
+        public void DiscardChanges()
+        {
+            _doc = SpaDocument.Load(_saved);
+            OnPropertyChanged(nameof(HasUnsavedChanges));
+            RebuildFields();
+            RebuildTextures();
+            Replay();
+            StartUndo();
+            StatusText = "Changes discarded.";
+        }
+    }
+}

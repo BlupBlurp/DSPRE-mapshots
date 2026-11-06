@@ -1,0 +1,43 @@
+using System.Collections.Generic;
+
+namespace DSPRE.Resources
+{
+    public class ScriptCommandInfo
+    {
+        public ushort CommandId { get; set; }
+
+        /// <summary>What the command is called. </summary>
+        public string Name { get; set; }
+
+        /// <summary>
+        /// The name the old database used, kept only so a project written before the rename can still be
+        /// read back.
+        /// </summary>
+        public string LegacyName { get; set; }
+
+        public string DecompName { get; set; }
+        public byte[] ParameterSizes { get; set; }
+        public List<ScriptParameter.ParameterType> ParameterTypes { get; set; }
+        public List<string> ParameterNames { get; set; }
+        public string Description { get; set; }
+
+        public ScriptCommandInfo()
+        {
+            ParameterSizes = new byte[0];
+            ParameterTypes = new List<ScriptParameter.ParameterType>();
+            ParameterNames = new List<string>();
+        }
+
+        public int ParameterCount => ParameterSizes?.Length ?? 0;
+
+        public bool HasConditionalParameters => ParameterSizes != null && ParameterSizes.Length > 0 && ParameterSizes[0] == 0xFF;
+    }
+
+    public class MovementCommandInfo
+    {
+        public ushort CommandId { get; set; }
+        public string Name { get; set; }
+        public string DecompName { get; set; }
+        public string Description { get; set; }
+    }
+}

@@ -1,0 +1,825 @@
+using System;
+using System.Collections.Generic;
+using System.Collections.ObjectModel;
+using System.ComponentModel;
+using System.IO;
+using System.Linq;
+using System.Runtime.CompilerServices;
+using System.Threading.Tasks;
+using DSPRE.Avalonia.Data;
+using DSPRE.Editors;
+using DSPRE.ROMFiles;
+using static DSPRE.RomInfo;
+using static DSPRE.ROMFiles.VsIntroTables;
+using Kind = DSPRE.Avalonia.Data.GraphicAssets.Kind;
+
+namespace DSPRE.Avalonia.ViewModels.Trainers
+{
+    /// <summary>One line of an intro list: a group heading, a record, a combo or a class.</summary>
+    public sealed class IntroRow : INotifyPropertyChanged
+    {
+        public event PropertyChangedEventHandler PropertyChanged;
+        public bool IsHeader { get; init; }
+        public bool IsItem => !IsHeader;
+        public Record Record { get; init; }
+        public int Combo { get; init; } = -1;
+        public int Class { get; init; } = -1;
+
+        private string _title = "", _detail = "";
+        public string Title { get => _title; set { if (_title == value) return; _title = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Title))); } }
+        public string Detail { get => _detail; set { if (_detail == value) return; _detail = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Detail))); } }
+    }
+
+    /// <summary>A file the game fixes in code, with a way to open it where there is one.</summary>
+    public sealed class FixedArt
+    {
+        public string Label { get; init; }
+        public string Value { get; init; }
+        public Action Open { get; init; }
+        public bool CanOpen => Open != null;
+    }
+
+    public sealed class ParticleArt
+    {
+        public string Label { get; init; }
+        public int File { get; init; }
+        public string Value => File.ToString();
+    }
+
+    /// <summary>
+    /// The intros special trainer battles open with: the mugshot records and their art, and which trainer
+    /// classes get which intro and music.
+    /// </summary>
+    public partial class VsIntroEditorViewModel : INotifyPropertyChanged, IEditorWithUnsavedChanges, ISupportsUndo, IDetachable
+    {
+        public event PropertyChangedEventHandler PropertyChanged;
+        private void Raise([CallerMemberName] string n = null) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(n));
+        private void Raise(params string[] names) { foreach (string n in names) Raise(n); }
+
+        private VsIntroTables _t;
+        private VsIntroNames _names = new();
+        private ScriptNarc _art;
+        private Kind[] _kinds = Array.Empty<Kind>();
+        private FieldFont _font;
+        private VsIntroPreview _preview;
+        private readonly Dictionary<int, ushort[]> _classColours = new();
+        private bool _suppress;
+
+        public const string Title = "VS intro editor";
+        private const DirNames Archive = DirNames.EncounterEffectGraphics;
+
+        public VsIntroEditorViewModel() { }
+
+        /// <summary>Reads everything the editor shows. File work only, for the busy overlay's thread.</summary>
+        public void Load()
+        {
+            // With the class metadata patch the stock tables are retired, and no longer read as they were.
+            if (!DetectClassRecords()) _t = VsIntroTables.Load(Part.Trainers);
+            IsClassIntroPatch = _t?.ClassesInPatch == true;
+            List<DirNames> dirs = new List<DirNames> { Archive, DirNames.TextArchives };
+            if (GameFamily == GameFamilies.Plat || IsClassIntroPatch) dirs.Add(DirNames.TrainerGraphics);
+            DSUtils.TryUnpackNarcs(dirs);
+            _names = VsIntroNames.Read();
+            _art = new ScriptNarc(Archive);
+            _artCount = _art.Available ? _art.Count : 0;
+            _kinds = Enumerable.Range(0, _artCount)
+                               .Select(i => { try { return GraphicAssets.Identify(_art.Get(i)); } catch (Exception ex) { AppLogger.WarnOnce("VsIntroEditorViewModel.Load", ex); return Kind.Unknown; } }).ToArray();
+            try { _font = FieldFont.LoadSystemFont(); } catch (Exception ex) { AppLogger.WarnOnce("VsIntroEditorViewModel.Load", ex); _font = null; }
+            _preview = new VsIntroPreview(ArtBytes, _font);
+            LoadMotion();
+            if (IsClassRecords) { LoadClassRecords(); LoadTimings(); }
+            if (IsClassIntroPatch) LoadCiRows();
+        }
+
+        /// <summary>Fills the lists once loaded, on the UI thread.</summary>
+        public void Ready()
+        {
+            ReadyMotion();
+            if (IsClassRecords) { ReadyClassRecords(); return; }
+            BuildChoices();
+            if (IsClassIntroPatch) { ReadyCiRows(); return; }
+            BuildMugshotRows();
+            BuildIntroRows();
+            BuildClassRows();
+            StartUndo();
+            SelectedMugshot = MugshotRows.FirstOrDefault(r => r.IsItem);
+            SelectedIntro = IntroRows.FirstOrDefault(r => r.IsItem);
+            SelectedClass = _classRowOf.GetValueOrDefault(_t.FirstSwitchClass > 0 ? _t.FirstSwitchClass : 1) ?? ClassRows.FirstOrDefault(r => r.IsItem);
+            StatusText = _t.Family == GameFamilies.DP
+                ? "Diamond and Pearl cut the face out of the class's battle sprite, so there is no mugshot art to pick."
+                : "";
+        }
+
+        private int _tab;
+        public int SelectedTab { get => _tab; set { if (_tab == value) return; _tab = value; Raise(); } }
+
+        private string _status = "";
+        public string StatusText { get => _status; set { if (_status == value) return; _status = value; Raise(); } }
+
+        public bool IsDp => _t?.Family == GameFamilies.DP;
+        public bool IsHgss => _t?.Family == GameFamilies.HGSS;
+        public bool IsPlatinum => _t?.Family == GameFamilies.Plat;
+
+        // ── Choices ──────────────────────────────────────────────────────────────────────────────
+
+        private readonly List<int[]> _faceSets = new(), _bannerSets = new();
+        private readonly List<int> _palettes = new(), _sequenceIds = new();
+        public ObservableCollection<string> TrainerChoices { get; } = new();
+        public ObservableCollection<string> ClassChoices { get; } = new();
+        public ObservableCollection<string> SequenceChoices { get; } = new();
+        public ObservableCollection<string> FaceSetChoices { get; } = new();
+        public ObservableCollection<string> BannerSetChoices { get; } = new();
+        public ObservableCollection<string> FramePaletteChoices { get; } = new();
+
+        private void BuildChoices()
+        {
+            TrainerChoices.Clear();
+            for (int i = 0; i < _names.Trainers.Length; i++) TrainerChoices.Add(_names.Trainer(i));
+            ClassChoices.Clear();
+            for (int i = 0; i < _names.Classes.Length; i++) ClassChoices.Add(_names.Class(i));
+
+            _sequenceIds.Clear();
+            _sequenceIds.AddRange(_names.SequenceChoices(Enumerable.Range(0, _t.ComboCount).Select(_t.SequenceOf)));
+            SequenceChoices.Clear();
+            foreach (int id in _sequenceIds) SequenceChoices.Add(_names.Sequence(id));
+
+            RebuildArtChoices();
+        }
+
+        private void RebuildArtChoices()
+        {
+            _palettes.Clear();
+            for (int i = 0; i < _kinds.Length; i++) if (_kinds[i] == Kind.Palette) _palettes.Add(i);
+            FindSets(_faceSets, _t.Records.Select(r => r.FaceMembers()), Kind.Palette, Kind.TileGraphic, Kind.CellLayout, Kind.CellAnimation);
+            FindSets(_bannerSets, _t.Records.Select(r => r.BannerMembers()), Kind.Palette, Kind.TileGraphic, Kind.TileMap);
+            // In place, so the pickers keep their selection when a new copy joins the lists.
+            ListSync.Apply(FaceSetChoices, _faceSets.Select(set => ArtLabel(set[0], r => r.FaceMembers()?[0])).ToList());
+            ListSync.Apply(BannerSetChoices, _bannerSets.Select(set => ArtLabel(set[0], r => r.BannerMembers()?[0])).ToList());
+            ListSync.Apply(FramePaletteChoices, _palettes.Select(p => ArtLabel(p, r => r.Has(RecordField.FramePalette) ? r.Get(RecordField.FramePalette) : null)).ToList());
+        }
+
+        /// <summary>
+        /// Every run of files laid out the way the records' own sets are, so a set is only ever offered whole.
+        /// HGSS keeps a banner's tiles before its palette, so the layout is read from the records.
+        /// </summary>
+        private void FindSets(List<int[]> sets, IEnumerable<int[]> used, params Kind[] roles)
+        {
+            sets.Clear();
+            List<int[]> layouts = used.Where(m => m != null && m.Length == roles.Length)
+                              .Select(m => m.Select(x => x - m.Min()).ToArray())
+                              .Where(o => o.Distinct().Count() == o.Length && o.Max() == o.Length - 1)
+                              .GroupBy(o => string.Join(",", o)).Select(g => g.First()).ToList();
+            for (int i = 0; i < _kinds.Length; i++)
+                foreach (int[] offsets in layouts)
+                    if (offsets.Select((o, k) => i + o < _kinds.Length && _kinds[i + o] == roles[k]).All(x => x))
+                    {
+                        sets.Add(offsets.Select(o => i + o).ToArray());
+                        break;
+                    }
+            foreach (int[] m in used)
+                if (m != null && m.Length == roles.Length && !sets.Any(x => x.SequenceEqual(m))) sets.Add(m);
+        }
+
+        // A file is named after the records that use it, as the retail rows set them.
+        private string ArtLabel(int member, Func<Record, int?> uses)
+        {
+            if (_newArt.ContainsKey(member)) return $"New copy ({member})";
+            List<string> who = _t.Records.Where(r => uses(r) == member).Select(r => _names.Record(_t, r)).Distinct().ToList();
+            VsIntroSites s = _t.Sites;
+            if (who.Count == 0 && member == s.PlayerFaceBoy) who.Add("Boy player");
+            if (who.Count == 0 && member == s.PlayerFaceGirl) who.Add("Girl player");
+            // Art no retail record uses is named after the classes whose patch rows show it.
+            if (who.Count == 0 && IsClassIntroPatch)
+                who.AddRange(Enumerable.Range(0, Math.Min(_ciRows.Count, CiClassCount))
+                    .Where(c => _ciRows[c].Style == ClassIntroPatch.Style.Gym && (_ciRows[c].GymPortrait[0] == member || _ciRows[c].GymBanner[0] == member)
+                             || _ciRows[c].Style == ClassIntroPatch.Style.League && _ciRows[c].LeaguePortrait == member)
+                    .Select(c => c < _ciClassNames.Length ? _ciClassNames[c] : c.ToString()).Distinct().Take(3));
+            return (who.Count == 0 ? "Unused" : string.Join(", ", who)) + $" ({member})";
+        }
+
+        // ── Mugshots tab ─────────────────────────────────────────────────────────────────────────
+
+        public ObservableCollection<IntroRow> MugshotRows { get; } = new();
+
+        private void BuildMugshotRows()
+        {
+            MugshotRows.Clear();
+            void Group(string heading, IEnumerable<Record> records)
+            {
+                List<Record> list = records.ToList();
+                if (list.Count == 0) return;
+                MugshotRows.Add(new IntroRow { IsHeader = true, Title = heading });
+                foreach (Record r in list) MugshotRows.Add(new IntroRow { Record = r });
+            }
+            Group("Gym Leaders", _t.Records.Where(r => r.Kind == RecordKind.Gym));
+            Group("Rival", _t.Records.Where(r => r.Kind == RecordKind.Rival));
+            Group("Elite Four and Champion", _t.Records.Where(r => r.Kind == RecordKind.League));
+            Group("Team Rocket", _t.Records.Where(r => r.Kind == RecordKind.Executive));
+            RenameMugshots();
+        }
+
+        private void RenameMugshots()
+        {
+            foreach (IntroRow row in MugshotRows.Where(r => r.IsItem))
+            {
+                row.Title = _names.Record(_t, row.Record);
+                row.Detail = string.Join(", ", ClassesFor(row.Record).Select(_names.Class).Distinct());
+            }
+        }
+
+        private IEnumerable<int> CombosFor(Record r)
+        {
+            HashSet<int> effects = new HashSet<int>(_t.EffectsUsing(r));
+            return Enumerable.Range(0, _t.ComboCount).Where(c => effects.Contains(_t.EffectOf(c)));
+        }
+
+        private IEnumerable<int> ClassesFor(Record r) => CombosFor(r).SelectMany(_t.ClassesUsing);
+
+        private IntroRow _mugshot;
+        public IntroRow SelectedMugshot
+        {
+            get => _mugshot;
+            set
+            {
+                if (value != null && value.IsHeader) { Raise(); return; }
+                if (_mugshot == value) return;
+                _mugshot = value;
+                StopAnimation();
+                RaiseMugshot();
+            }
+        }
+
+        private Record Rec => _mugshot?.Record;
+        private bool Has(RecordField f) => Rec != null && Rec.Has(f);
+
+        public bool HasMugshot => Rec != null;
+        public string MugshotTitle => Rec == null ? "" : _names.Record(_t, Rec);
+        public string MugshotUsedBy
+        {
+            get
+            {
+                if (Rec == null) return "";
+                List<string> classes = ClassesFor(Rec).Select(_names.Class).Distinct().ToList();
+                return classes.Count == 0 ? "No trainer class uses this intro." : "Used by " + string.Join(", ", classes) + ".";
+            }
+        }
+
+        public bool ShowTrainer => Has(RecordField.TrainerId);
+        public int TrainerIndex
+        {
+            get => ShowTrainer ? Rec.Get(RecordField.TrainerId) : -1;
+            set { if (!_suppress && ShowTrainer && value >= 0 && value != TrainerIndex) { Rec.Set(RecordField.TrainerId, value); Edited(); } }
+        }
+
+        // HGSS only compares the gym record's class with the rival class, which prints the save's rival name.
+        public bool ShowRivalName => IsHgss && Has(RecordField.Class) && Rec.Kind is RecordKind.Gym or RecordKind.Rival;
+        public bool RivalName
+        {
+            get => ShowRivalName && Rec.Get(RecordField.Class) == HgssRivalClass;
+            set
+            {
+                if (_suppress || !ShowRivalName || value == RivalName) return;
+                int fallback = ClassesFor(Rec).FirstOrDefault(c => c != HgssRivalClass);
+                Rec.Set(RecordField.Class, value ? HgssRivalClass : fallback);
+                Edited();
+            }
+        }
+
+        public bool ShowClass => !IsHgss && Has(RecordField.Class);
+        public string ClassLabel => IsDp ? "Face from class" : "Face colours";
+        public string ClassTip => IsDp
+            ? "The face is cut out of this class's battle sprite"
+            : "The face takes this class's battle sprite colours";
+        public int ClassIndex
+        {
+            get => ShowClass ? Rec.Get(RecordField.Class) : -1;
+            set { if (!_suppress && ShowClass && value >= 0 && value != ClassIndex) { Rec.Set(RecordField.Class, value); Edited(); } }
+        }
+        public bool CanEditClassColours => IsPlatinum && ShowClass;
+
+        public bool ShowEndX => Has(RecordField.EndX);
+        public decimal EndX
+        {
+            get => ShowEndX ? Rec.Get(RecordField.EndX) : 0;
+            set { if (!_suppress && ShowEndX) { Rec.Set(RecordField.EndX, (int)value); Edited(); } }
+        }
+
+        public bool ShowFaceColumn => Has(RecordField.FaceColumn) && IsDp;
+        public decimal FaceColumn
+        {
+            get => ShowFaceColumn ? Rec.Get(RecordField.FaceColumn) : 0;
+            set { if (!_suppress && ShowFaceColumn) { Rec.Set(RecordField.FaceColumn, (int)value); Edited(); } }
+        }
+
+        public bool ShowFace => Rec?.FaceMembers() != null;
+        public int FaceSetIndex
+        {
+            get
+            {
+                int[] m = Rec?.FaceMembers();
+                return m == null || _hidePicks ? -1 : _faceSets.FindIndex(s => s.SequenceEqual(m));
+            }
+            set
+            {
+                if (_suppress || Rec == null || value < 0 || value >= _faceSets.Count || value == FaceSetIndex) return;
+                if (Rec.SetFaceMembers(_faceSets[value])) Edited();
+            }
+        }
+        public string FaceFiles => Rec?.FaceMembers() is int[] m ? string.Join(", ", m) : "";
+
+        public bool ShowBanner => Rec?.BannerMembers() != null;
+        public int BannerSetIndex
+        {
+            get
+            {
+                int[] m = Rec?.BannerMembers();
+                return m == null || _hidePicks ? -1 : _bannerSets.FindIndex(s => s.SequenceEqual(m));
+            }
+            set
+            {
+                if (_suppress || Rec == null || value < 0 || value >= _bannerSets.Count || value == BannerSetIndex) return;
+                if (Rec.SetBannerMembers(_bannerSets[value])) Edited();
+            }
+        }
+        public string BannerFiles => Rec?.BannerMembers() is int[] m ? string.Join(", ", m) : "";
+
+        public bool ShowFramePalette => Has(RecordField.FramePalette);
+        public string FramePaletteLabel => IsDp ? "Banner colours" : "Frame colours";
+        public int FramePaletteIndex
+        {
+            get => ShowFramePalette && !_hidePicks ? _palettes.IndexOf(Rec.Get(RecordField.FramePalette)) : -1;
+            set
+            {
+                if (_suppress || !ShowFramePalette || value < 0 || value >= _palettes.Count || value == FramePaletteIndex) return;
+                Rec.Set(RecordField.FramePalette, _palettes[value]);
+                Edited();
+            }
+        }
+
+        public bool ShowClash => Has(RecordField.ClashFrames);
+        public decimal ClashFrames
+        {
+            get => ShowClash ? Rec.Get(RecordField.ClashFrames) : 0;
+            set { if (!_suppress && ShowClash) { Rec.Set(RecordField.ClashFrames, (int)value); Edited(); } }
+        }
+
+        public bool ShowCamera => Has(RecordField.CameraTurn);
+        public decimal CameraTurn
+        {
+            get => ShowCamera ? Rec.Get(RecordField.CameraTurn) : 0;
+            set { if (!_suppress && ShowCamera) { Rec.Set(RecordField.CameraTurn, (int)value); Edited(); } }
+        }
+        public decimal PanFrames
+        {
+            get => ShowCamera ? Rec.Get(RecordField.PanFrames) : 0;
+            set { if (!_suppress && ShowCamera) { Rec.Set(RecordField.PanFrames, (int)value); Edited(); } }
+        }
+
+        public ObservableCollection<ParticleArt> Particles { get; } = new();
+        public bool ShowParticles => Rec?.Kind == RecordKind.League && Particles.Count > 0;
+        public ObservableCollection<FixedArt> Fixed { get; } = new();
+
+        private void RaiseMugshot()
+        {
+            _suppress = true;
+            try
+            {
+                Particles.Clear();
+                if (Rec?.Kind == RecordKind.League)
+                    for (int i = 0; i < _t.ParticleFiles.Length; i++)
+                        Particles.Add(new ParticleArt { Label = i == 0 ? "First burst" : "Second burst", File = _t.ParticleFiles[i] });
+                BuildFixed();
+                Raise(nameof(HasMugshot), nameof(MugshotTitle), nameof(MugshotUsedBy), nameof(ShowTrainer), nameof(TrainerIndex),
+                      nameof(ShowRivalName), nameof(RivalName), nameof(ShowClass), nameof(ClassLabel), nameof(ClassTip), nameof(ClassIndex),
+                      nameof(CanEditClassColours), nameof(ShowEndX), nameof(EndX), nameof(ShowFaceColumn), nameof(FaceColumn),
+                      nameof(ShowFace), nameof(FaceSetIndex), nameof(FaceFiles), nameof(ShowBanner), nameof(BannerSetIndex), nameof(BannerFiles),
+                      nameof(ShowFramePalette), nameof(FramePaletteLabel), nameof(FramePaletteIndex), nameof(ShowClash), nameof(ClashFrames),
+                      nameof(ShowCamera), nameof(CameraTurn), nameof(PanFrames), nameof(ShowParticles), nameof(HasPreview));
+            }
+            finally { _suppress = false; }
+            RenderPreview();
+        }
+
+        private void BuildFixed()
+        {
+            Fixed.Clear();
+            if (Rec == null) return;
+            VsIntroSites s = _t.Sites;
+            void Add(string label, string value, Action open = null) => Fixed.Add(new FixedArt { Label = label, Value = value, Open = open });
+            string Files(int first, int n) => string.Join(", ", Enumerable.Range(first, n));
+
+            if (IsDp)
+            {
+                if (Rec.Kind == RecordKind.Gym && s.GymBanner >= 0)
+                    Add("Banner", Files(s.GymBanner, 3), () => AvaloniaEditorLauncher.OpenGraphicAt(Archive, s.GymBanner + 2, true));
+                if (Rec.Kind == RecordKind.League && s.LeagueFrame >= 0)
+                    Add("Banner frame", Files(s.LeagueFrame, 3), () => OpenCells(Order(s.LeagueFrame, 3), Rec.Get(RecordField.FramePalette), "League banner"));
+                return;
+            }
+            if (Rec.Kind != RecordKind.Executive && s.VsMark >= 0)
+                Add("VS mark", Files(s.VsMark, 4), () => OpenCells(Order(s.VsMark, 4), -1, "VS mark"));
+            if (Rec.Kind == RecordKind.League)
+            {
+                Add("Frame", Files(s.LeagueFrame, 3), () => OpenCells(Order(s.LeagueFrame, 3), Rec.Get(RecordField.FramePalette), "League frame"));
+                Add("Boy player", Files(s.PlayerFaceBoy, 4), () => OpenCells(Order(s.PlayerFaceBoy, 4), -1, "Player face"));
+                Add("Girl player", Files(s.PlayerFaceGirl, 4), () => OpenCells(Order(s.PlayerFaceGirl, 4), -1, "Player face"));
+            }
+            if (Rec.Kind == RecordKind.Executive && s.ExecutiveBackdrop >= 0)
+                Add("Backdrop", Files(s.ExecutiveBackdrop, 4), () => AvaloniaEditorLauncher.OpenGraphicAt(Archive, s.ExecutiveBackdrop + 3, true));
+            if (s.NamePalette >= 0) Add("Name colours", s.NamePalette.ToString());
+            if (Rec.Kind is RecordKind.Gym or RecordKind.Rival)
+                Add("Timing", "Face slides in over 4 frames, VS over 6, banner scrolls 30 pixels a frame");
+            if (Rec.Kind == RecordKind.League)
+                Add("Timing", "Faces slide in over 6 frames, then the clash, then an 8 frame fade");
+        }
+
+        /// <summary>A run of files sorted into palette, tiles, cells, animation, whatever order the archive keeps them in.</summary>
+        private int[] Order(int first, int count)
+        {
+            int Find(Kind k) => Enumerable.Range(first, count).FirstOrDefault(i => i < _kinds.Length && _kinds[i] == k, -1);
+            return new[] { Find(Kind.Palette), Find(Kind.TileGraphic), Find(Kind.CellLayout), Find(Kind.CellAnimation) };
+        }
+
+        // ── Opening the art ──────────────────────────────────────────────────────────────────────
+
+        private static GraphicAssets.Archive ArtArchive => GraphicAssets.All.FirstOrDefault(a => a.Dir == Archive);
+
+        // The palette goes with it: classes share drawings and differ only in colours, as the Elite Four do.
+        private static void Paint(int ncgr, int nclr)
+        {
+            GraphicAssets.Archive archive = ArtArchive;
+            if (archive == null || ncgr < 0) return;
+            new Views.Graphics.GraphicPainterView(new GraphicPainterViewModel(archive, ncgr, nclr)).ShowManaged();
+        }
+
+        private static void OpenCells(int[] m, int palette, string what)
+        {
+            if (m == null || m[3] < 0) return;
+            AvaloniaEditorLauncher.OpenCellAnimationEditor(Archive, m[3], m[2], m[1], palette >= 0 ? palette : m[0], 0, what);
+        }
+
+        public void PaintFace() { if (Rec?.FaceMembers() is int[] m && !RefuseUnsavedArt(m)) Paint(m[1], m[0]); }
+        public void AnimateFace() { if (Rec?.FaceMembers() is int[] m && !RefuseUnsavedArt(m)) OpenCells(m, -1, MugshotTitle + " face"); }
+        public void PaintBanner() { if (Rec?.BannerMembers() is int[] m && !RefuseUnsavedArt(m)) Paint(m[1], m[0]); }
+        public void ShowBannerInGraphics() { if (Rec?.BannerMembers() is int[] m && !RefuseUnsavedArt(m)) AvaloniaEditorLauncher.OpenGraphicAt(Archive, m[2], true, m[0]); }
+        public void EditClassColours() { if (CanEditClassColours) AvaloniaEditorLauncher.OpenTrainerSpriteEditor(Rec.Get(RecordField.Class)); }
+        public void OpenParticles(ParticleArt p) { if (p != null) AvaloniaEditorLauncher.OpenParticleEditor(Archive, p.File, $"{MugshotTitle}: {p.Label}", null); }
+
+        /// <summary>Goes to the combo that uses this mugshot on the other tab.</summary>
+        public void ShowClassesAndMusic()
+        {
+            if (Rec == null) return;
+            int combo = CombosFor(Rec).DefaultIfEmpty(-1).First();
+            IntroRow row = IntroRows.FirstOrDefault(r => r.Combo == combo);
+            if (row == null) return;
+            SelectedIntro = row;
+            SelectedTab = IntrosTab;
+        }
+
+        // ── Preview ──────────────────────────────────────────────────────────────────────────────
+
+        private global::Avalonia.Media.Imaging.Bitmap _image;
+        public global::Avalonia.Media.Imaging.Bitmap PreviewImage { get => _image; private set { _image = value; Raise(); } }
+        public bool HasPreview => IsClassRecords ? ClassScene() != null : IsClassIntroPatch ? CiScene() != null : !IsDp && Rec != null && Scene() != null;
+
+        private bool _girl;
+        public bool PlayerGirl { get => _girl; set { if (_girl == value) return; _girl = value; Raise(); RenderPreview(); RenderClassPreview(); } }
+        public bool ShowPlayerChoice => IsClassRecords ? Record?.VsStyle == 2 : IsClassIntroPatch ? CiIsLeague : Rec?.Kind == RecordKind.League && !IsDp;
+
+        private ushort[] ClassColours(int trainerClass)
+        {
+            if (!IsPlatinum || trainerClass < 0) return null;
+            if (_classColours.TryGetValue(trainerClass, out ushort[] c)) return c;
+            try { c = NitroBgCodec.ReadColours(new ScriptNarc(DirNames.TrainerGraphics).Get(trainerClass * 5 + 1)); }
+            catch (Exception ex) { AppLogger.WarnOnce("VsIntroEditorViewModel.ClassColours", ex); c = null; }
+            if (c != null && c.Length == 0) c = null;
+            return _classColours[trainerClass] = c;
+        }
+
+        private VsIntroPreview.Scene Scene()
+        {
+            if (IsClassRecords) return ClassScene();
+            if (IsClassIntroPatch) return CiScene();
+            return Rec == null || IsDp || _preview == null ? null : SceneFor(Rec);
+        }
+
+        private VsIntroPreview.Scene SceneFor(Record rec)
+        {
+            VsIntroSites s = _t.Sites;
+            int[] Four(int first) => first < 0 ? null : Order(first, 4);
+            string name = rec.Kind == RecordKind.Rival || (IsHgss && rec.Has(RecordField.Class) && rec.Get(RecordField.Class) == HgssRivalClass)
+                ? "Rival" : rec.Has(RecordField.TrainerId) ? _names.Trainer(rec.Get(RecordField.TrainerId)) : "";
+            switch (rec.Kind)
+            {
+                case RecordKind.Gym:
+                case RecordKind.Rival:
+                    return new VsIntroPreview.Scene
+                    {
+                        Kind = VsIntroPreview.Layout.Gym, Face = rec.FaceMembers(), Banner = rec.BannerMembers(), Vs = Four(s.VsMark),
+                        FaceColours = ClassColours(IsPlatinum ? rec.Get(RecordField.Class) : -1),
+                        EndX = rec.Get(RecordField.EndX), NamePalette = s.NamePalette, Name = name,
+                    };
+                case RecordKind.League:
+                    int[] frame = Order(s.LeagueFrame, 3);
+                    return new VsIntroPreview.Scene
+                    {
+                        Kind = VsIntroPreview.Layout.League, Face = rec.FaceMembers(), Vs = Four(s.VsMark),
+                        FaceColours = ClassColours(IsPlatinum ? rec.Get(RecordField.Class) : -1),
+                        PlayerFace = Four(_girl ? s.PlayerFaceGirl : s.PlayerFaceBoy), PlayerColours = ClassColours(IsPlatinum ? (_girl ? 1 : 0) : -1),
+                        Frame = new[] { frame[1], frame[2] }, FrameAnim = frame[3], FramePalette = rec.Get(RecordField.FramePalette),
+                        ClashFrames = rec.Get(RecordField.ClashFrames), NamePalette = s.NamePalette, Name = name,
+                        Particles = RomLocator.VsIntroMotionSites?.LeagueParticles, ParticleEmitters = _t?.ParticleEmitters,
+                    };
+                default:
+                    return new VsIntroPreview.Scene
+                    {
+                        Kind = VsIntroPreview.Layout.Executive, Face = rec.FaceMembers(), NamePalette = s.NamePalette, Name = name,
+                        // The filled R screen is the fifth after the tiles.
+                        Backdrop = s.ExecutiveBackdrop >= 0 ? new[] { s.ExecutiveBackdrop, s.ExecutiveBackdrop + 1, s.ExecutiveBackdrop + 2, s.ExecutiveBackdrop + 3, s.ExecutiveBackdrop + 6 } : null,
+                    };
+            }
+        }
+
+        private int _frame = -1;
+        private global::Avalonia.Threading.DispatcherTimer _timer;
+        public bool Animating => _timer != null;
+        public string AnimateLabel => Animating ? "Stop" : "Animate";
+
+        private void RenderPreview()
+        {
+            Raise(nameof(HasPreview), nameof(ShowPlayerChoice));
+            VsIntroPreview.Scene scene = Scene();
+            if (scene == null) { PreviewImage = null; return; }
+            try { PreviewImage = ImageConverter.FromRgba(_preview.Draw(scene, _frame), DsBgScreen.Width, DsBgScreen.Height); }
+            catch (Exception e) { AppLogger.Error("VS intro preview failed: " + e.Message); PreviewImage = null; }
+        }
+
+        public void ToggleAnimation()
+        {
+            if (Animating) { StopAnimation(); RenderPreview(); return; }
+            VsIntroPreview.Scene scene = Scene();
+            if (scene == null) return;
+            int length = VsIntroPreview.Length(scene);
+            _frame = 0;
+            _timer = new global::Avalonia.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1000.0 / 30) };
+            _timer.Tick += (_, _) =>
+            {
+                if (++_frame >= length) { StopAnimation(); }
+                RenderPreview();
+            };
+            _timer.Start();
+            Raise(nameof(Animating), nameof(AnimateLabel));
+            RenderPreview();
+        }
+
+        /// <summary>Redraws the preview when art in the intro archive is saved elsewhere, such as an edited animation.</summary>
+        public void Attach() { AppEvents.ArchiveMemberSaved += OnArchiveMemberSaved; AppEvents.RomPatchStateChanged += OnRomPatchStateChanged; AppEvents.NamesChanged += OnNamesChanged; }
+        public void Detach() { AppEvents.ArchiveMemberSaved -= OnArchiveMemberSaved; AppEvents.RomPatchStateChanged -= OnRomPatchStateChanged; AppEvents.NamesChanged -= OnNamesChanged; }
+
+        // Classes added, removed or renamed, or trainers renamed, in another editor.
+        private void OnNamesChanged(object sender, EventArgs e) => global::Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            if (IsClassRecords) { ReloadClasses(); return; }
+            if (IsClassIntroPatch) { ReloadCiNames(); return; }
+            _names = VsIntroNames.Read();
+            RefreshAll();
+        });
+
+        private void OnRomPatchStateChanged(object sender, EventArgs e)
+        {
+            OnPatchStateChanged();
+            // The class table may have moved; with nothing unsaved, reading it again is the same as discarding.
+            if (_t != null && !IsClassRecords && !IsClassIntroPatch && !HasUnsavedChanges) DiscardChanges();
+        }
+
+        private void OnArchiveMemberSaved(object sender, DirNames dir)
+        {
+            if (dir != Archive) return;
+            global::Avalonia.Threading.Dispatcher.UIThread.Post(() => { if (!Animating) RenderPreview(); });
+        }
+
+        public void StopAnimation()
+        {
+            _timer?.Stop();
+            _timer = null;
+            _frame = -1;
+            Raise(nameof(Animating), nameof(AnimateLabel));
+        }
+
+        // ── Trainer intros tab ───────────────────────────────────────────────────────────────────
+
+        public ObservableCollection<IntroRow> IntroRows { get; } = new();
+        private List<int> _trainerCombos = new();
+
+        private string GroupOf(int combo)
+        {
+            IntroKind kind = _t.KindOfEffect(_t.EffectOf(combo));
+            if (kind == IntroKind.Gym) return "Gym Leaders";
+            if (kind == IntroKind.League) return "Elite Four and Champion";
+            if (kind == IntroKind.Rival || _t.RoleOf(combo) == ComboRole.Rival) return "Rival";
+            if (kind is IntroKind.TeamGrunt or IntroKind.TeamLeader) return IsHgss ? "Team Rocket" : "Team Galactic";
+            return "Other";
+        }
+
+        private void BuildIntroRows()
+        {
+            IntroRows.Clear();
+            _trainerCombos = Enumerable.Range(0, _t.ComboCount).Where(_t.OwnsMusic).ToList();
+            foreach (string group in new[] { "Gym Leaders", "Elite Four and Champion", "Rival", "Team Rocket", "Team Galactic", "Other" })
+            {
+                List<int> combos = _trainerCombos.Where(c => GroupOf(c) == group).ToList();
+                if (combos.Count == 0) continue;
+                IntroRows.Add(new IntroRow { IsHeader = true, Title = group });
+                foreach (int c in combos) IntroRows.Add(new IntroRow { Combo = c });
+            }
+            RenameIntros();
+        }
+
+        private void RenameIntros()
+        {
+            foreach (IntroRow row in IntroRows.Where(r => r.IsItem))
+            {
+                row.Title = _names.Combo(_t, row.Combo);
+                row.Detail = _names.Sequence(_t.SequenceOf(row.Combo));
+            }
+        }
+
+        private IntroRow _intro;
+        public IntroRow SelectedIntro
+        {
+            get => _intro;
+            set
+            {
+                if (value != null && value.IsHeader) { Raise(); return; }
+                if (_intro == value) return;
+                _intro = value;
+                RaiseIntro();
+            }
+        }
+
+        private int Combo => _intro?.Combo ?? -1;
+        public bool HasIntro => Combo >= 0;
+        public string IntroTitle => HasIntro ? _names.Combo(_t, Combo) : "";
+        public string IntroKindText => HasIntro ? VsIntroNames.Kind(_t, _t.EffectOf(Combo)) : "";
+        public int SequenceIndex
+        {
+            get => HasIntro ? _sequenceIds.IndexOf(_t.SequenceOf(Combo)) : -1;
+            set
+            {
+                if (_suppress || !HasIntro || value < 0 || value >= _sequenceIds.Count || value == SequenceIndex) return;
+                _t.SetSequence(Combo, _sequenceIds[value]);
+                Edited();
+            }
+        }
+        public bool HasIntroMugshot => HasIntro && MugshotRows.Any(r => r.Record != null && r.Record == _t.RecordFor(_t.EffectOf(Combo)));
+        public ObservableCollection<IntroRow> IntroClasses { get; } = new();
+        public string IntroClassesNote => !HasIntro ? "" : _t.RoleOf(Combo) switch
+        {
+            ComboRole.Ordinary => "Every class not given another intro.",
+            ComboRole.Frontier or ComboRole.Link or ComboRole.Double or ComboRole.FrontierBrain or ComboRole.DoubleLeader
+                => "Picked by the kind of battle, whatever the class.",
+            _ => IntroClasses.Count == 0 ? "No class uses this intro." : "",
+        };
+
+        private void RaiseIntro()
+        {
+            _suppress = true;
+            try
+            {
+                IntroClasses.Clear();
+                if (HasIntro) foreach (int c in _t.ClassesUsing(Combo)) IntroClasses.Add(new IntroRow { Class = c, Title = _names.Class(c) });
+                Raise(nameof(HasIntro), nameof(IntroTitle), nameof(IntroKindText), nameof(SequenceIndex), nameof(HasIntroMugshot), nameof(IntroClassesNote));
+            }
+            finally { _suppress = false; }
+        }
+
+        public void ShowMugshot()
+        {
+            if (!HasIntro) return;
+            Record record = _t.RecordFor(_t.EffectOf(Combo));
+            IntroRow row = MugshotRows.FirstOrDefault(r => r.Record != null && r.Record == record);
+            if (row == null) return;
+            SelectedMugshot = row;
+            SelectedTab = MugshotsTab;
+        }
+
+        // ── Editing, undo and saving ─────────────────────────────────────────────────────────────
+
+        private ByteStateUndo _undo;
+        // Each step holds the intro tables or class records together with the motion tables.
+        private void StartUndo()
+        {
+            Func<byte[]> take = IsClassRecords ? RecordsSnapshot : IsClassIntroPatch ? CiSnapshot : _t.Snapshot;
+            Action<byte[]> apply = IsClassRecords ? RestoreRecords : IsClassIntroPatch ? CiRestore : s => { _t.Restore(s); RefreshAll(); };
+            _undo = new ByteStateUndo(
+                () => ByteStateUndo.Pack(w =>
+                {
+                    byte[] main = take(), motion = _motion?.Snapshot() ?? Array.Empty<byte>(), timing = _timing?.Snapshot() ?? Array.Empty<byte>();
+                    w.Write(main.Length); w.Write(main); w.Write(motion.Length); w.Write(motion); w.Write(timing.Length); w.Write(timing);
+                }),
+                state => ByteStateUndo.Unpack(state, r =>
+                {
+                    byte[] main = r.ReadBytes(r.ReadInt32()), motion = r.ReadBytes(r.ReadInt32()), timing = r.ReadBytes(r.ReadInt32());
+                    apply(main);
+                    RestoreMotion(motion);
+                    RestoreTimings(timing);
+                }),
+                () => Raise(nameof(CanUndo), nameof(CanRedo)));
+        }
+        public bool CanUndo => _undo?.CanUndo == true;
+        public bool CanRedo => _undo?.CanRedo == true;
+        public void Undo() => _undo?.Undo();
+        public void Redo() => _undo?.Redo();
+
+        private void Edited()
+        {
+            _undo?.Record();
+            RefreshAll();
+        }
+
+        private void RefreshAll()
+        {
+            RenameMugshots();
+            RenameIntros();
+            BuildBulkChoices();
+            RenameClasses();
+            RaiseMugshot();
+            RaiseIntro();
+            RaiseClass();
+            Raise(nameof(HasUnsavedChanges));
+        }
+
+        public bool HasUnsavedChanges => HasNewArt || (IsClassRecords ? RecordsChanged : IsClassIntroPatch ? CiRowsChanged : _t?.HasChanges == true) || _motion?.HasChanges == true
+                                         || _timing?.HasChanges == true;
+        public string UnsavedChangesDescription => "VS intros";
+
+        public void SaveChanges() => DialogHelper.Watch(SaveChangesAsync());
+
+        public async Task<bool> SaveChangesAsync()
+        {
+            bool hadMotion = _motion?.HasChanges == true || _timing?.HasChanges == true || HasNewArt;
+            // New art goes first: the records about to be saved point at it.
+            if (!await SaveNewArtAsync()) return false;
+            if (!await SaveMotionAsync()) return false;
+            // A class's timings are saved with its intro record, so a class that fails keeps both unsaved.
+            if (IsClassRecords) return await SaveRecordsAsync();
+            if (IsClassIntroPatch) return await SaveCiRowsAsync();
+            if (!await SaveTimingsAsync()) return false;
+            if (_t == null || !_t.HasChanges)
+            {
+                if (hadMotion) { Raise(nameof(HasUnsavedChanges)); SaveNotice.Saved(UnsavedChangesDescription); StatusText = "Saved."; }
+                return true;
+            }
+            // hg-engine's music rows are source text, saved as one hg-engine write like the other editors.
+            if (_t.FromSource)
+            {
+                (bool saved, string error) = await HgEngineSave.RunAsync(() => { _t.Save(); return null; });
+                if (!saved)
+                {
+                    if (error != null) await DialogHelper.ShowErrorAsync("The VS intros weren't saved:\n" + error, Title);
+                    return false;
+                }
+            }
+            else
+            {
+                try { _t.Save(); }
+                catch (Exception e) when (e is IOException || e is UnauthorizedAccessException)
+                {
+                    await DialogHelper.ShowErrorAsync("The VS intros weren't saved:\n" + e.Message, Title);
+                    return false;
+                }
+            }
+            RefreshAll();
+            SaveNotice.Saved(UnsavedChangesDescription);
+            StatusText = "Saved.";
+            return true;
+        }
+
+        public void DiscardChanges()
+        {
+            DiscardNewArt();
+            if (_motion?.HasChanges == true) ReloadMotion();
+            if (_timing?.HasChanges == true) { LoadTimings(); ShowTimings(); }
+            if (IsClassRecords) { DiscardRecords(); return; }
+            if (IsClassIntroPatch) { CiDiscard(); return; }
+            if (_t == null) { Raise(nameof(HasUnsavedChanges)); return; }
+            try { _t = VsIntroTables.Load(Part.Trainers); }
+            catch (Exception e) when (e is IOException || e is InvalidDataException || e is InvalidOperationException)
+            {
+                _ = DialogHelper.ShowErrorAsync("The saved VS intros couldn't be read back:\n" + e.Message, Title);
+                return;
+            }
+            int mug = MugshotRows.IndexOf(_mugshot), intro = IntroRows.IndexOf(_intro), cls = ClassId;
+            _mugshot = null; _intro = null; _class = null;
+            BuildChoices();
+            BuildMugshotRows();
+            BuildIntroRows();
+            BuildClassRows();
+            StartUndo();
+            SelectedMugshot = mug >= 0 && mug < MugshotRows.Count ? MugshotRows[mug] : MugshotRows.FirstOrDefault(r => r.IsItem);
+            SelectedIntro = intro >= 0 && intro < IntroRows.Count ? IntroRows[intro] : IntroRows.FirstOrDefault(r => r.IsItem);
+            SelectedClass = _classRowOf.GetValueOrDefault(cls) ?? ClassRows.FirstOrDefault(r => r.IsItem);
+            Raise(nameof(HasUnsavedChanges), nameof(CanUndo), nameof(CanRedo));
+        }
+    }
+}

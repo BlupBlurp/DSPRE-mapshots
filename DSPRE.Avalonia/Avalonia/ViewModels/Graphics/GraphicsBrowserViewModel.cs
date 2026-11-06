@@ -1,0 +1,707 @@
+using System;
+using System.Collections.Generic;
+using System.Collections.ObjectModel;
+using System.ComponentModel;
+using System.Linq;
+using System.Runtime.CompilerServices;
+using Avalonia.Media.Imaging;
+using DSPRE.Avalonia.Data;
+
+namespace DSPRE.Avalonia.ViewModels.Graphics
+{
+    /// <summary>Every 2D graphic in the game in one list, with a picture of whatever is picked.</summary>
+    public sealed class GraphicsBrowserViewModel : INotifyPropertyChanged, DSPRE.Editors.IEditorWithUnsavedChanges, ISupportsUndo
+    {
+        public event PropertyChangedEventHandler PropertyChanged;
+        private void OnPropertyChanged([CallerMemberName] string n = null)
+            => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(n));
+        private bool Set<T>(ref T field, T value, [CallerMemberName] string n = null)
+        {
+            if (EqualityComparer<T>.Default.Equals(field, value)) return false;
+            field = value; OnPropertyChanged(n); return true;
+        }
+
+        /// <summary>One row of the list: a whole thing, usually several files. Properties, not fields, so
+        /// compiled bindings see them.</summary>
+        public sealed class Item
+        {
+            public GraphicAssets.Archive Archive { get; init; }
+            public GraphicAssets.Group In { get; init; }
+            /// <summary>The first of this thing's files, and what is shown when nothing else is picked.</summary>
+            public int Index { get; init; }
+            public GraphicAssets.Unit Unit { get; init; }
+            /// <summary>What this thing is called. Most have game names, so the archive isn't repeated on
+            /// every row.</summary>
+            public string Name { get; init; }
+            public string Label => Unit?.Gathered == true ? Name
+                : Name == null ? $"{Index,5}  {Archive.Title}"
+                : $"{Index,5}  {Name}";
+            public string Search { get; init; }   // lowercased, for filtering
+            public string Tip { get; init; }
+        }
+
+        /// <summary>One file of the thing picked, offered underneath it.</summary>
+        public sealed class Part
+        {
+            public int Index { get; init; }
+            /// <summary>Usually the row's own archive, but a model's pictures and movement live elsewhere.</summary>
+            public GraphicAssets.Archive Archive { get; init; }
+            public string Name { get; init; }
+            /// <summary>What this file is, so the list opens on a picture, not a palette.</summary>
+            public GraphicAssets.Kind Kind { get; init; }
+
+            /// <summary>
+            /// What to call this part. A part with its own name, like "Back, female", keeps it.
+            /// </summary>
+            public string Label => Name switch
+            {
+                "Colours" => "Colours",
+                "Drawing" => "Picture",
+                "Arrangement" => "Tile map",
+                "As it appears" => "Cell layout",
+                "Animation" => "Cell animation",
+                "Still picture" => "Still picture",
+                _ => Name,
+            };
+        }
+
+        /// <summary>One tab: a kind of graphic, and how many of them this game has.</summary>
+        public sealed class CategoryTab
+        {
+            public string Title { get; init; }
+            public GraphicAssets.Group? Only { get; init; }   // null means everything
+            public int Count { get; init; }
+            public string What { get; init; }
+            public string Header => $"{Title} ({Count})";
+        }
+
+        private readonly List<Item> _everything = new();
+        private List<Item> _scannedItems;
+        private List<CategoryTab> _scannedTabs;
+
+        /// <summary>
+        /// The launcher defers the archive scan so it can run behind the busy overlay. Tests and small
+        /// callers keep the convenient eager behavior.
+        /// </summary>
+        public GraphicsBrowserViewModel(bool loadImmediately = true)
+        {
+            _pending.Changed += RaiseEdited;
+            if (loadImmediately) Reload();
+        }
+
+        /// <summary>
+        /// Opens the window already looking at one file, for an editor handing a graphic over.
+        /// </summary>
+        // Colours a caller asked for, kept only while its row is showing: a class that shares drawings with
+        // others differs from them only in its palette, which the archive's own pairing cannot know.
+        private int _coloursFrom = -1;
+        private Item _coloursFor;
+
+        /// <summary>The colours file the caller asked for while its row is shown, or -1.</summary>
+        public int ShownColours => _selected != null && ReferenceEquals(_selected, _coloursFor) && ShowingArchive?.Dir == _selected.Archive.Dir ? _coloursFrom : -1;
+
+        public bool JumpTo(GraphicAssets.Archive archive, int fileIndex, bool preferAssembled = false, int palette = -1)
+        {
+            if (archive == null) return false;
+
+            // Land on the tab that holds it, so the row is not filtered out of view.
+            CategoryTab tab = Tabs.FirstOrDefault(t => t.Only == archive.In) ?? Tabs.FirstOrDefault();
+            bool tabChanged = false;
+            if (tab != null && !ReferenceEquals(tab, _selectedTab))
+            {
+                _selectedTab = tab;
+                OnPropertyChanged(nameof(SelectedTab));
+                tabChanged = true;
+            }
+            // One filter pass for both, so the rows are the new tab's.
+            if (Set(ref _search, "", nameof(Search)) || tabChanged) ApplyFilter();
+
+            Item row = _everything.FirstOrDefault(i => i.Archive.Dir == archive.Dir
+                                                   && i.Unit != null
+                                                   && i.Unit.Parts.Any(pt => pt.Index == fileIndex
+                                                        && (pt.Archive == null || pt.Archive.Dir == archive.Dir)))
+                   ?? _everything.FirstOrDefault(i => i.Archive.Dir == archive.Dir && i.Index == fileIndex);
+            if (row == null) return false;
+
+            _coloursFrom = palette;
+            _coloursFor = palette >= 0 ? row : null;
+            if (!Shown.Contains(row)) Shown.Insert(0, row);
+            Selected = row;
+
+            // A sprite whose drawing is scattered tiles reads as broken, so a caller can land on it put together.
+            int at = preferAssembled ? Parts.ToList().FindIndex(pt => pt.Name == "As it appears") : -1;
+            if (at < 0) at = Parts.ToList().FindIndex(pt => pt.Index == fileIndex);
+            if (at >= 0) PartIndex = at;
+            return true;
+        }
+
+        /// <summary>Builds and publishes the list in one go.</summary>
+        public void Reload() { Scan(); Publish(); }
+
+        /// <summary>
+        /// Walks every archive and works out what it holds. This touches files but no bound collection,
+        /// so the launcher can run it away from the UI thread.
+        /// </summary>
+        public void Scan()
+        {
+            List<Item> found = new List<Item>();
+            List<CategoryTab> tabs = new List<CategoryTab>();
+            GraphicAssets.Forget();
+
+            // Rows are built once per archive: building them for every tab took most of the open time.
+            List<(GraphicAssets.Archive Archive, List<GraphicAssets.Unit> Units)> archives = new();
+            foreach (GraphicAssets.Archive a in GraphicAssets.All)
+            {
+                int n;
+                try { n = GraphicAssets.Count(a); } catch (Exception ex) { AppLogger.WarnOnce("GraphicsBrowserViewModel.Scan", ex); n = 0; }
+                if (n == 0) continue;      // this game does not have it
+                archives.Add((a, GraphicAssets.Units(a, n)));
+            }
+
+            foreach (GraphicAssets.Group g in Enum.GetValues<GraphicAssets.Group>())
+            {
+                int inGroup = 0;
+                // A row can name its own tab, so a mixed archive is read for every tab.
+                foreach ((GraphicAssets.Archive a, List<GraphicAssets.Unit> units) in archives)
+                {
+                    if (a.In != g && !units.Any(u => u.In == g)) continue;
+
+                    foreach (GraphicAssets.Unit u in units)
+                    {
+                        if ((u.In ?? a.In) != g) continue;
+                        // Count things, not files: a row is a whole Pokémon or trainer.
+                        inGroup++;
+                        found.Add(new Item
+                        {
+                            Archive = a, In = g, Index = u.First, Name = u.Name, Unit = u, Tip = u.Tip,
+                            Search = SearchMatch.Fold(a.Title + " " + u.First + " " + a.What + " " + u.Name),
+                        });
+                    }
+                }
+                if (inGroup > 0)
+                    tabs.Add(new CategoryTab { Title = FriendlyGroup(g), Only = g, Count = inGroup,
+                                               What = WhatIsOn(g, found) });
+            }
+
+            if (tabs.Count > 0)
+                tabs.Insert(0, new CategoryTab { Title = "Everything", Only = null, Count = found.Count,
+                                                 What = "Every flat graphic this game has." });
+
+            _scannedItems = found;
+            _scannedTabs = tabs;
+        }
+
+        /// <summary>Puts what <see cref="Scan"/> found into the bound collections. UI thread only.</summary>
+        public void Publish()
+        {
+            _everything.Clear();
+            _everything.AddRange(_scannedItems ?? new List<Item>());
+            Tabs.Clear();
+            foreach (CategoryTab tab in _scannedTabs ?? new List<CategoryTab>()) Tabs.Add(tab);
+            _selectedTab = Tabs.FirstOrDefault();
+            OnPropertyChanged(nameof(SelectedTab));
+
+            ApplyFilter();
+        }
+
+        /// <summary>Which archives feed a tab. A tab can use part of an archive, so this asks the rows.</summary>
+        private static string WhatIsOn(GraphicAssets.Group g, IEnumerable<Item> items)
+        {
+            IEnumerable<string> titles = items.Where(i => i.In == g).Select(i => i.Archive.Title).Distinct();
+            return string.Join("  ", titles);
+        }
+
+        private static string FriendlyGroup(GraphicAssets.Group g) => g switch
+        {
+            GraphicAssets.Group.PokemonSprites => "Pokémon sprites",
+            GraphicAssets.Group.PokemonIcons => "Pokémon icons",
+            GraphicAssets.Group.Trainers => "Trainers",
+            GraphicAssets.Group.BattleScenery => "Battle scenery",
+            GraphicAssets.Group.BattleGauges => "Battle HP bars",
+            GraphicAssets.Group.BattleIcons => "Battle icons",
+            GraphicAssets.Group.BattleChrome => "Battle screen",
+            GraphicAssets.Group.MoveEffects => "Move effects",
+            GraphicAssets.Group.Items => "Items",
+            GraphicAssets.Group.TextAndFonts => "Fonts",
+            GraphicAssets.Group.Windows => "Text boxes",
+            GraphicAssets.Group.MenuScreens => "Menu screens",
+            GraphicAssets.Group.Places => "Places",
+            GraphicAssets.Group.BottomScreen => "Bottom screen",
+            _ => g.ToString(),
+        };
+
+        public ObservableCollection<CategoryTab> Tabs { get; } = new();
+        public ObservableCollection<Item> Shown { get; } = new();
+
+        private CategoryTab _selectedTab;
+        public CategoryTab SelectedTab
+        {
+            get => _selectedTab;
+            set { if (Set(ref _selectedTab, value)) ApplyFilter(); }
+        }
+
+        private string _search = "";
+        public string Search
+        {
+            get => _search;
+            set { if (Set(ref _search, value)) ApplyFilter(); }
+        }
+
+        private void ApplyFilter()
+        {
+            Shown.Clear();
+            string q = SearchMatch.Fold((_search ?? "").Trim());
+            IEnumerable<Item> hits = _everything;
+            if (_selectedTab?.Only != null) hits = hits.Where(i => i.In == _selectedTab.Only.Value);
+            if (!string.IsNullOrEmpty(q)) hits = hits.Where(i => i.Search.Contains(q));
+            // Thousands of entries would make the list crawl, so show the first slice and say so.
+            foreach (Item i in hits.Take(ShowAtMost)) Shown.Add(i);
+            if (_selected == null || !Shown.Contains(_selected))
+                Selected = FirstWorthSelecting();
+            OnPropertyChanged(nameof(FoundSummary));
+        }
+
+        /// <summary>
+        /// Prefers a row the ROM can name. Unnamed archive slots remain visible and selectable, but they
+        /// are a poor first impression when a named graphic sits immediately after them.
+        /// </summary>
+        private Item FirstWorthSelecting()
+        {
+            Item first = Shown.FirstOrDefault();
+            if (first == null) return null;
+            return Shown.FirstOrDefault(item => !string.Equals(
+                item.Name, item.Archive?.Title, StringComparison.Ordinal)) ?? first;
+        }
+
+        private const int ShowAtMost = 3000;
+
+        public string FoundSummary
+        {
+            get
+            {
+                string q = (_search ?? "").Trim();
+                int total = _everything.Count;
+                if (total == 0) return "This game has no graphics DSPRE can list. Open a ROM first.";
+                int here = _selectedTab?.Count ?? total;
+                string what = _selectedTab?.Only == null ? "in this game" : "under " + _selectedTab.Title;
+                if (string.IsNullOrEmpty(q))
+                    return Shown.Count < here
+                        ? $"{here} graphics {what}; first {Shown.Count} shown"
+                        : $"{here} graphics {what}.";
+                return Shown.Count == 0
+                    ? $"Nothing {what} matches \"{q}\". Try part of a name, like trainer or icon."
+                    : $"{Shown.Count} of {here} {what} match \"{q}\".";
+            }
+        }
+
+        /// <summary>The files that make up whatever is picked. Only shown when there is more than one,
+        /// because a single file needs no choosing between.</summary>
+        public ObservableCollection<Part> Parts { get; } = new();
+        public bool HasParts => Parts.Count > 1;
+
+        private void BuildParts()
+        {
+            Parts.Clear();
+            if (_selected?.Unit != null && _selected.Unit.Parts.Count > 1)
+                foreach (GraphicAssets.UnitPart up in _selected.Unit.Parts)
+                    Parts.Add(new Part { Index = up.Index, Archive = up.Archive, Name = up.Name, Kind = up.Kind });
+
+            _partIndex = -1;
+            OnPropertyChanged(nameof(PartIndex));
+            // Open on something you can look at; the colours come first in a lot of these archives.
+            _partIndex = Parts.Count > 0 ? Math.Max(0, FirstWorthShowing()) : -1;
+            OnPropertyChanged(nameof(PartIndex));
+            OnPropertyChanged(nameof(HasParts));
+        }
+
+        /// <summary>
+        /// The first part that is a picture, not a palette, or the first part when there is no picture.
+        /// </summary>
+        private int FirstWorthShowing()
+        {
+            for (int i = 0; i < Parts.Count; i++)
+                if (Parts[i].Kind != GraphicAssets.Kind.Palette) return i;
+            return 0;
+        }
+
+        private int _partIndex = -1;
+        public int PartIndex
+        {
+            get => _partIndex;
+            set
+            {
+                if (!Set(ref _partIndex, value) || _selected == null) return;
+                OnPropertyChanged(nameof(CanShowShiny));
+                OnPropertyChanged(nameof(ShinyHelp));
+                OnPropertyChanged(nameof(HasOwningEditor));
+                OnPropertyChanged(nameof(OwningEditorLabel));
+                OnPropertyChanged(nameof(OwningEditorHelp));
+                Look();
+            }
+        }
+
+        /// <summary>What the file being shown is called, falling back to the archive's own name where
+        /// the game does not name its files.</summary>
+        private string Showing(GraphicAssets.Archive a)
+        {
+            GraphicAssets.Archive arc = ShowingArchive ?? a;
+            try
+            {
+                string name = arc.NameOf?.Invoke(ShowingIndex);
+                if (!string.IsNullOrWhiteSpace(name)) return name;
+            }
+            catch { }   // an entry without a name uses the archive's title
+            return arc.Title;
+        }
+
+        /// <summary>The file actually being shown: the piece picked, or the thing itself when it is one
+        /// file on its own.</summary>
+        public int ShowingIndex => _partIndex >= 0 && _partIndex < Parts.Count
+            ? Parts[_partIndex].Index : _selected?.Index ?? 0;
+
+        /// <summary>The archive the piece being shown lives in.</summary>
+        public GraphicAssets.Archive ShowingArchive =>
+            (_partIndex >= 0 && _partIndex < Parts.Count ? Parts[_partIndex].Archive : null)
+            ?? _selected?.Archive;
+
+        /// <summary>The editor that decides this graphic's numbers, when one does. </summary>
+        public string OwningEditorName
+        {
+            get
+            {
+                GraphicAssets.Archive a = ShowingArchive;
+                if (a == null) return null;
+                try { return AvaloniaEditorLauncher.EditorForGraphic(a.Dir, ShowingIndex)?.Name; }
+                catch (Exception ex) { AppLogger.WarnOnce("GraphicsBrowserViewModel.OwningEditorName", ex); return null; }
+            }
+        }
+
+        public bool HasOwningEditor => OwningEditorName != null;
+
+        public string OwningEditorLabel => HasOwningEditor
+            ? $"Open in {OwningEditorName}" : "Open in editor";
+
+        public string OwningEditorHelp => HasOwningEditor
+            ? null : "No editor works on this graphic";
+
+        /// <summary>Opens whatever owns this graphic. Does nothing when nothing does.</summary>
+        public void OpenOwningEditor()
+        {
+            GraphicAssets.Archive a = ShowingArchive;
+            if (a == null) return;
+            try { AvaloniaEditorLauncher.EditorForGraphic(a.Dir, ShowingIndex)?.Open?.Invoke(); }
+            catch (Exception ex) { AppLogger.Error("OpenOwningEditor failed: " + ex.Message); }
+        }
+
+        private bool _showShiny;
+        /// <summary>Show a Pokemon in its shiny colours. The drawing is the same either way; only which
+        /// of its two sets of colours is used changes, which is all shiny means in these games.</summary>
+        public bool ShowShiny
+        {
+            get => _showShiny;
+            set { if (Set(ref _showShiny, value) && _selected != null) Look(); }
+        }
+
+        public bool CanShowShiny => ShowingArchive?.ShinyColourEntry != null;
+
+        public string ShinyHelp => CanShowShiny
+            ? "Show this in its shiny colours. Same drawing, different colours."
+            : "This kind has no second set of colours.";
+
+        private Item _selected;
+        public Item Selected
+        {
+            get => _selected;
+            set
+            {
+                if (!Set(ref _selected, value)) return;
+                BuildParts();
+                OnPropertyChanged(nameof(CanShowShiny));
+                OnPropertyChanged(nameof(ShinyHelp));
+                OnPropertyChanged(nameof(HasOwningEditor));
+                OnPropertyChanged(nameof(OwningEditorLabel));
+                OnPropertyChanged(nameof(OwningEditorHelp));
+                Look();
+            }
+        }
+
+        private Bitmap _picture;
+        public Bitmap Picture { get => _picture; private set => Set(ref _picture, value); }
+
+        private string _whynot = "";
+        /// <summary>Why there is no picture, when there is not one. Empty when there is.</summary>
+        public string Whynot { get => _whynot; private set => Set(ref _whynot, value); }
+        public bool HasPicture => _picture != null && !ShowsPalette;
+        public bool HasNoPicture => _picture == null && !string.IsNullOrEmpty(_whynot);
+
+        /// <summary>A palette entry's colours, each one changed by clicking it.</summary>
+        public ObservableCollection<GraphicPainterViewModel.Swatch> PaletteColours { get; } = new();
+        public bool ShowsPalette => PaletteColours.Count > 0;
+
+        private void ShowPaletteColours(GraphicAssets.Archive archive, int index, GraphicAssets.Kind kind)
+        {
+            PaletteColours.Clear();
+            (byte r, byte g, byte b)[] colours = kind == GraphicAssets.Kind.Palette ? GraphicAssets.ReadPaletteEntry(archive, index) : null;
+            for (int i = 0; colours != null && i < colours.Length; i++)
+                PaletteColours.Add(new GraphicPainterViewModel.Swatch
+                {
+                    Number = i,
+                    Fill = new global::Avalonia.Media.SolidColorBrush(global::Avalonia.Media.Color.FromRgb(colours[i].r, colours[i].g, colours[i].b)),
+                    // Banks of 16 are how sprites pick their colours, so the bank is worth naming.
+                    Tip = colours.Length > 16 ? $"Colour {i % 16} of bank {i / 16}. Click to change it." : $"Colour {i}. Click to change it.",
+                });
+            OnPropertyChanged(nameof(ShowsPalette));
+        }
+
+        /// <summary>Changes one colour of the palette being shown; it waits for Save like an import.</summary>
+        public string SetPaletteColour(int number, byte r, byte g, byte b)
+        {
+            if (_selected == null || !ShowsPalette) return "Pick a set of colours first.";
+            GraphicAssets.Archive archive = ShowingArchive ?? _selected.Archive;
+            int index = ShowingIndex;
+            return _pending.Import(() => GraphicAssets.WritePaletteColour(archive, index, number, r, g, b));
+        }
+
+        private string _details = "Pick something on the left to see it.";
+        public string Details { get => _details; private set => Set(ref _details, value); }
+
+        public ObservableCollection<DetailFact> Facts { get; } = new();
+
+        private void ShowFacts(GraphicAssets.Archive a, string name = null, string value = null)
+        {
+            Details = "";
+            Facts.Clear();
+            Facts.Add(new DetailFact("Name", Showing(a)));
+            Facts.Add(new DetailFact("Number", ShowingIndex.ToString()));
+            if (name != null) Facts.Add(new DetailFact(name, value));
+        }
+
+        private void Look()
+        {
+            Picture = null;
+            Whynot = "";
+            _shownKind = GraphicAssets.Kind.Unknown;
+            PaletteColours.Clear();
+            Facts.Clear();
+            OnPropertyChanged(nameof(ShowsPalette));
+            if (_selected == null)
+            {
+                Details = "Pick something on the left to see it.";
+                RaiseAll();
+                return;
+            }
+
+            GraphicAssets.Archive a = _selected.Archive;
+            try
+            {
+                using IDisposable pending = _pending.Reading();
+                GraphicAssets.Preview p = GraphicAssets.Render(ShowingArchive ?? a, ShowingIndex, _showShiny, paletteIndex: ShownColours);
+                ShowPaletteColours(ShowingArchive ?? a, ShowingIndex, p.Kind);
+                _shownKind = p.Kind;
+                if (p.Rgba != null && p.Width > 0)
+                {
+                    Picture = ImageConverter.FromRgba(p.Rgba, p.Width, p.Height);
+                    SizeToShow(p.Width, p.Height);
+                    if (ShowsPalette) ShowFacts(a, "Colours", PaletteColours.Count.ToString());
+                    else ShowFacts(a, "Size", $"{p.Width} × {p.Height}");
+                }
+                else
+                {
+                    Whynot = p.Whynot ?? "There is no picture in this entry.";
+                    ShowFacts(a);
+                }
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Error("GraphicsBrowser.Look failed: " + ex.Message);
+                Whynot = "This entry couldn't be opened.";
+                ShowFacts(a);
+            }
+            RaiseAll();
+        }
+
+        private void RaiseAll()
+        {
+            OnPropertyChanged(nameof(HasPicture));
+            OnPropertyChanged(nameof(HasNoPicture));
+            OnPropertyChanged(nameof(CanSavePicture));
+            OnPropertyChanged(nameof(HasSelection));
+            OnPropertyChanged(nameof(CanReplace));
+            OnPropertyChanged(nameof(ReplaceHelp));
+            OnPropertyChanged(nameof(CanPaint));
+            OnPropertyChanged(nameof(PaintHelp));
+            OnPropertyChanged(nameof(SavePictureHelp));
+        }
+
+        // ── what can be done with what is picked ───────────────────────────────────────────────────
+
+        /// <summary>Whether anything is picked. Saving a file as it is works on whatever is
+        /// selected, so with nothing selected the button has nothing to act on.</summary>
+        public bool HasSelection => _selected != null;
+
+        public bool CanSavePicture => _selected != null && _picture != null;
+
+        public string SavePictureHelp => _selected == null
+            ? "Pick something first."
+            : _picture != null
+                ? "Export a PNG that keeps its numbered colours, so it can be imported back unchanged."
+                : "No picture here to export. The file itself can still be exported.";
+
+        public bool CanReplace => _selected != null && ShowingArchive?.CannotImportBecause == null
+                                  && _picture != null;
+
+        private GraphicAssets.Kind _shownKind;
+
+        /// <summary>The editor that paints a tile map's screen in place, where there is one.</summary>
+        public (string Name, Action Open)? ScreenEditor
+        {
+            get
+            {
+                if (_shownKind != GraphicAssets.Kind.TileMap) return null;
+                return ShowingArchive?.Dir switch
+                {
+                    RomInfo.DirNames.SummaryGraphics when EditorAvailability.Allows("SummaryScreenEditorView") =>
+                        ("Summary screen", AvaloniaEditorLauncher.OpenSummaryScreen),
+                    RomInfo.DirNames.PokedexGraphics when EditorAvailability.Allows("PokedexGraphicsEditorView") =>
+                        ("Pokédex graphics", AvaloniaEditorLauncher.OpenPokedexGraphics),
+                    _ => null,
+                };
+            }
+        }
+
+        public bool CanPaint => CanReplace && (_shownKind != GraphicAssets.Kind.TileMap || ScreenEditor != null);
+
+        public string PaintHelp
+        {
+            get
+            {
+                if (!CanReplace) return ReplaceHelp;
+                if (_shownKind != GraphicAssets.Kind.TileMap) return "Paint this picture's pixels.";
+                return ScreenEditor is (string name, _)
+                    ? $"Opens the {name} editor, where this screen's pictures are painted in place."
+                    : "A tile map only says where squares go. Pick its picture to paint it.";
+            }
+        }
+
+        public string ReplaceHelp
+        {
+            get
+            {
+                if (_selected == null) return "Pick something first.";
+                if (ShowingArchive?.CannotImportBecause != null) return ShowingArchive.CannotImportBecause;
+                if (_picture == null)
+                    return "This entry has no picture in it, so a PNG can't take its place. "
+                         + (Whynot ?? "");
+                return "Replace this with a PNG of the same size and numbered colours. Export it first and paint over that.";
+            }
+        }
+
+        // Blown up to something readable, in whole steps so the pixels stay square, and never past a size
+        // that would need scrolling for no reason.
+        private int _shownW, _shownH;
+        public int ShownWidth => _shownW;
+        public int ShownHeight => _shownH;
+
+        private void SizeToShow(int w, int h)
+        {
+            if (w <= 0 || h <= 0) { _shownW = _shownH = 0; return; }
+            int step = 1;
+            while ((w * (step + 1)) <= 384 && (h * (step + 1)) <= 384 && step < 8) step++;
+            _shownW = w * step; _shownH = h * step;
+            OnPropertyChanged(nameof(ShownWidth));
+            OnPropertyChanged(nameof(ShownHeight));
+        }
+
+        private string _status = "";
+        public string StatusText { get => _status; set => Set(ref _status, value); }
+
+        /// <summary>A sensible file name for saving what is picked.</summary>
+        public string SuggestedFileName(string extension)
+        {
+            if (_selected == null) return "graphic" + extension;
+            string name = (ShowingArchive ?? _selected.Archive).Title.ToLowerInvariant().Replace(' ', '_');
+            foreach (char c in System.IO.Path.GetInvalidFileNameChars()) name = name.Replace(c, '_');
+            return $"{name}_{ShowingIndex:D4}{extension}";
+        }
+
+        public string SavePicture(string path)
+        {
+            if (_selected == null) return "Pick something first.";
+            using IDisposable pending = _pending.Reading();
+            return GraphicAssets.ExportPng(ShowingArchive ?? _selected.Archive, ShowingIndex, path, ShownColours);
+        }
+
+        public string SaveFileAsItIs(string path)
+        {
+            if (_selected == null) return "Pick something first.";
+            using IDisposable pending = _pending.Reading();
+            return GraphicAssets.ExportRaw(ShowingArchive ?? _selected.Archive, ShowingIndex, path);
+        }
+
+        public string Replace(string path) => Replace(path, out _);
+
+        /// <param name="note">A note to show afterwards, or null, such as a painted background changing
+        /// every place that uses it.</param>
+        public string Replace(string path, out string note) =>
+            Replace(path, PngColourPrompt.Choice.AsItIs, null, out note);
+
+        /// <summary>Imports with the answer to the colour question; added colours and the picture are one undo step.</summary>
+        public string Replace(string path, PngColourPrompt.Choice choice, GraphicAssets.PngColourCheck check, out string note)
+        {
+            note = null;
+            if (_selected == null) return "Pick something first.";
+            GraphicAssets.Archive archive = ShowingArchive ?? _selected.Archive;
+            int index = ShowingIndex, colours = ShownColours;
+            string said = null;
+            string err = _pending.Import(() => PngColourPrompt.Import(archive, index, path, choice, check, out said, colours));
+            note = said;
+            return err;
+        }
+
+        /// <summary>Imports an HP bar with the battle fitted to it: colours, picture and bar pieces as one undo step.</summary>
+        public string ReplaceHpBar(string path, HpBarFit.Plan plan, out string note)
+        {
+            note = null;
+            if (_selected == null) return "Pick something first.";
+            GraphicAssets.Archive archive = ShowingArchive ?? _selected.Archive;
+            int index = ShowingIndex;
+            string said = null;
+            string err = _pending.Import(() => HpBarImport.Apply(archive, index, path, plan,
+                () => _pending.Read(HpBarImport.SheetTarget), s => _pending.Stage(HpBarImport.SheetTarget, s), out said));
+            note = said;
+            return err;
+        }
+
+        /// <summary>The graphic an import would go into, for asking about its colours first.</summary>
+        public (GraphicAssets.Archive Archive, int Index) ImportTarget =>
+            _selected == null ? (null, -1) : (ShowingArchive ?? _selected.Archive, ShowingIndex);
+
+        // ── imports wait for Save ───────────────────────────────────────────────────────────────────
+
+        private readonly PendingArchiveWrites _pending = new();
+
+        public bool HasUnsavedChanges => _pending.IsDirty;
+        public string UnsavedChangesDescription => "Graphics";
+        public bool CanUndo => _pending.CanUndo;
+        public bool CanRedo => _pending.CanRedo;
+        public void Undo() => _pending.Undo();
+        public void Redo() => _pending.Redo();
+
+        public void SaveChanges()
+        {
+            _pending.Save();
+            SaveNotice.Saved(UnsavedChangesDescription);
+            StatusText = "Saved.";
+        }
+
+        public void DiscardChanges() => _pending.Discard();
+
+        private void RaiseEdited()
+        {
+            OnPropertyChanged(nameof(HasUnsavedChanges));
+            OnPropertyChanged(nameof(CanUndo));
+            OnPropertyChanged(nameof(CanRedo));
+            Look();   // show what is pending now
+        }
+    }
+}

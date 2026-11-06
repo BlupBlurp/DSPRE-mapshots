@@ -1,0 +1,99 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using Avalonia.Controls;
+using Avalonia.Controls.ApplicationLifetimes;
+using DSPRE.Avalonia.Views;
+using DSPRE.Editors;
+
+namespace DSPRE.Avalonia
+{
+    /// <summary>Enumerates Avalonia's embedded and standalone editors for project-change guards.</summary>
+    public static class OpenEditors
+    {
+        // Every window opened on a ROM, editor or not, so none outlives it and acts on the next one.
+        private static readonly HashSet<Window> RomWindows = new();
+
+        /// <summary>Closes <paramref name="window"/> with the ROM that is open now, unless it needs no ROM.</summary>
+        internal static void TrackRomWindow(Window window)
+        {
+            if (window == null || !AvaloniaEditorLauncher.IsRomLoaded) return;
+            if (window is Views.Shell.SettingsWindowView || window is Views.Shell.CommandPaletteView) return;
+            if (!RomWindows.Add(window)) return;
+            window.Closed += (_, _) => RomWindows.Remove(window);
+        }
+
+        public static IReadOnlyList<UnsavedChangesDialog.UnsavedEditorInfo> GetUnsavedEditors(
+            MainWindowView mainWindow = null)
+        {
+            List<UnsavedChangesDialog.UnsavedEditorInfo> result = new List<UnsavedChangesDialog.UnsavedEditorInfo>();
+            HashSet<IEditorWithUnsavedChanges> seen = new HashSet<IEditorWithUnsavedChanges>();
+
+            if (mainWindow != null)
+            {
+                foreach ((string EditorName, IEditorWithUnsavedChanges Editor) embedded in mainWindow.GetEmbeddedEditors())
+                {
+                    AddIfDirty(result, seen, embedded.EditorName, embedded.Editor);
+                }
+            }
+
+            if (global::Avalonia.Application.Current?.ApplicationLifetime
+                is not IClassicDesktopStyleApplicationLifetime desktop)
+            {
+                return result;
+            }
+
+            foreach (Window window in desktop.Windows.ToList())
+            {
+                if (ReferenceEquals(window, mainWindow)) continue;
+
+                IEditorWithUnsavedChanges editor = GetEditor(window);
+                if (editor == null) continue;
+                AddIfDirty(result, seen, GetWindowEditorName(window, editor), editor);
+            }
+
+            return result;
+        }
+
+        /// <summary>Descriptions of standalone windows with unsaved changes, for the shutdown guard.</summary>
+        public static IReadOnlyList<string> UnsavedDescriptions()
+            => GetUnsavedEditors().Select(info => info.ToString()).ToList();
+
+        public static void CloseEditorWindows(MainWindowView mainWindow = null)
+        {
+            if (global::Avalonia.Application.Current?.ApplicationLifetime
+                is not IClassicDesktopStyleApplicationLifetime desktop)
+            {
+                return;
+            }
+
+            foreach (Window window in desktop.Windows.ToList())
+            {
+                if (ReferenceEquals(window, mainWindow)) continue;
+                if (GetEditor(window) != null || RomWindows.Contains(window)) window.Close();
+            }
+        }
+
+        private static void AddIfDirty(
+            ICollection<UnsavedChangesDialog.UnsavedEditorInfo> result,
+            ISet<IEditorWithUnsavedChanges> seen,
+            string editorName,
+            IEditorWithUnsavedChanges editor)
+        {
+            if (editor == null || !editor.HasUnsavedChanges || !seen.Add(editor)) return;
+            result.Add(new UnsavedChangesDialog.UnsavedEditorInfo
+            {
+                EditorName = editorName,
+                Description = editor.UnsavedChangesDescription,
+                Editor = editor,
+            });
+        }
+
+        private static IEditorWithUnsavedChanges GetEditor(Window window)
+            => window?.DataContext as IEditorWithUnsavedChanges
+                ?? (window?.Content as Control)?.DataContext as IEditorWithUnsavedChanges;
+
+        private static string GetWindowEditorName(Window window, IEditorWithUnsavedChanges editor)
+            => UnsavedChangesDialog.NameWithoutMarker(window?.Title, editor);
+    }
+}

@@ -4,45 +4,6 @@
 
 ---
 
-## 2.3.4
-- Fixed the Event Editor on Spanish SoulSilver. It looked for the overworld sprite table in the
-  wrong place, showed a warning and then crashed, leaving the map and events empty. The table is
-  now found and overworld sprites show as normal. If the table ever can't be found on some other
-  version, you still get the warning but the editor no longer crashes.
-
----
-
-## 2.3.3
-- The Ground Item Scripts window, opened from the Event Editor, can now change an existing entry
-  instead of only adding and removing them. Selecting an entry loads its item and quantity into the
-  boxes below, and Update Selected writes your changes back. If Overworld Item events already use
-  that entry you are asked to confirm first, since all of them will give the new item.
-
----
-
-## 2.3.2
-- Fixed the trainer class picture never appearing in Diamond and Pearl. Those two games keep only a
-  drawing and its colours for each class, where Platinum and HeartGold keep five files and animate
-  them, so the editor was reading another class's files. Their artwork is also stored scrambled, the
-  same way Pokémon battle sprites are. The picture now appears in the Trainer Editor, in the battle
-  message editor and beside the Table Editor's VS Trainer list. Diamond and Pearl classes have no
-  animation, so the frame box and Animate stay switched off for them.
-
----
-
-## 2.3.1
-- Fixed the Starter Pokémon Editor breaking the script that gives you your starter in Diamond, Pearl
-  and Platinum. Those games keep the held item in that script rather than in a table, so the Held
-  Item box was writing somewhere it should not. The box is now only offered on HeartGold and
-  SoulSilver, and the editor points you at the script instead: on Platinum that is script file 427.
-- Fixed the Battle Display preview drawing the front (enemy) sprite one pixel too low, reverting an
-  adjustment made in 2.2.3 that turned out to be wrong.
-- Fixed the Table Editor's VS Pokémon panel never saving. Save This Entry did nothing at all, so the
-  species and effect combo you picked were never written to the ROM. Closing the Table Editor with
-  unsaved changes in that panel also asked you nothing; it now does.
-
----
-
 ## 2.3
 
 ### Sprite Editor
@@ -55,14 +16,14 @@
 - Added sprite sheet import and export, for one gender or for both genders in a single image.
 - Added an Import Wizard and an Export Wizard for moving several poses in or out at once.
 - Alternate forms are now a dropdown next to the species picker instead of a separate mode you had
-  to switch into, and picking one keeps the rest of the Pokémon Editor on the matching entry.
+  to switch into, and picking one keeps the rest of the PokÃ©mon Editor on the matching entry.
 - Fixed the editor reading the wrong data for the species whose default form is stored in the
   alternate forms archive rather than the main one: Deoxys, Unown, Castform, Burmy, Wormadam,
   Cherrim, Shellos, Gastrodon, Arceus, and depending on the game Shaymin, Rotom, Giratina and Pichu.
   Editing those species used to change bytes the game never reads, so nothing happened in game.
 - The alternate form entries such as Deoxys Attack can now be picked by name from the species list.
 - Fixed alternate forms showing the same artwork under both genders. A form of a genderless or
-  single-gender Pokémon now leaves the absent gender blank, matching what can actually be saved.
+  single-gender PokÃ©mon now leaves the absent gender blank, matching what can actually be saved.
 - Fixed saving an alternate form writing into the main sprite archive's unpacked folder instead of
   its own, which left the wrong entries on disk.
 - Fixed the Egg and Bad Egg entries never matching a species, so they showed no sprite at all.
@@ -74,7 +35,7 @@
 ### Evolutions Editor
 
 - The Evolutions Editor now lists the alternate form entries, with a note that forms have no
-  evolutions of their own and that they belong on the base Pokémon.
+  evolutions of their own and that they belong on the base PokÃ©mon.
 
 ### Battle Display
 

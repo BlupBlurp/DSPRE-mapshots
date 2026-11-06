@@ -1,0 +1,206 @@
+using DSPRE;
+using DSPRE.Resources;
+using DSPRE.ROMFiles;
+using System;
+using System.Globalization;
+
+public class ScriptParameter
+{
+    public enum ParameterType
+    {
+        Integer,
+        Variable,
+        Flex,
+        Overworld,
+        OwMovementType,
+        OwMovementDirection,
+        ComparisonOperator,
+        Function,
+        Action,
+        CMDNumber,
+        Pokemon,
+        Item,
+        Move,
+        Sound,
+        Trainer,
+        NpcTrade,
+        TrainerClass
+    }
+
+    public enum ParameterDisplayMode
+    {
+        Names,
+        IDs
+    }
+
+    public static ParameterDisplayMode DisplayMode { get; set; } = ParameterDisplayMode.Names;
+
+    public static ParameterType ParseTypeString(string typeStr)
+    {
+        try
+        {
+            return (ParameterType)Enum.Parse(typeof(ParameterType), typeStr, true); // true = ignore case
+        }
+        catch (ArgumentException)
+        {
+            AppLogger.Warn($"Warning: Unknown parameter type '{typeStr}', defaulting to Integer");
+            return ParameterType.Integer;
+        }
+    }
+
+    public ParameterType Type { get; set; } = ParameterType.Integer;
+    public byte[] RawData { get; set; }
+    public string DisplayValue { get; set; }
+    public string TargetLabel { get; set; }  // For RelativeJump type
+    public int TargetOffset { get; set; }   // For RelativeJump type
+
+    public ScriptParameter(byte[] data, ParameterType type)
+    {
+        RawData = data;
+        Type = type;
+        DisplayValue = FormatParameter(data, type);
+    }
+
+    public ScriptParameter(int targetOffset, string targetLabel)
+    {
+        Type = ParameterType.Function;
+        TargetOffset = targetOffset;
+        TargetLabel = targetLabel;
+        RawData = BitConverter.GetBytes(targetOffset);
+    }
+
+    public string GetFormattedValue()
+    {
+        if (Type == ParameterType.Function && !string.IsNullOrEmpty(TargetLabel))
+        {
+            return TargetLabel;
+        }
+
+        if (RawData.Length == 0) return "";
+        if (RawData.Length == 1) return RawData[0].ToString("X2");
+        if (RawData.Length == 2) return BitConverter.ToUInt16(RawData, 0).ToString("X4");
+        if (RawData.Length == 4) return BitConverter.ToUInt32(RawData, 0).ToString("X8");
+
+        return BitConverter.ToString(RawData);
+    }
+    private string FormatParameter(byte[] data, ParameterType type)
+    {
+        uint value;
+        switch (data.Length)
+        {
+            case 1:
+                value = data[0];
+                break;
+            case 2:
+                value = BitConverter.ToUInt16(data, 0);
+                break;
+            case 4:
+                value = BitConverter.ToUInt32(data, 0);
+                break;
+            default:
+                throw new ArgumentException($"Unexpected parameter data length: {data.Length}");
+        }
+
+        if (DisplayMode == ParameterDisplayMode.Names)
+        {
+            return FormatParameterWithNames(value, type);
+        }
+        else
+        {
+            return FormatParameterAsID(value, type);
+        }
+    }
+
+    private string FormatParameterWithNames(uint value, ParameterType type)
+    {
+        switch (type)
+        {
+            case ParameterType.Pokemon:
+                if (ScriptDatabase.PokemonNames.TryGetValue((ushort)value, out string pokeName))
+                    return $"{pokeName}";
+                break;
+            case ParameterType.Item:
+                if (ScriptDatabase.ItemNames.TryGetValue((ushort)value, out string itemName))
+                    return $"{itemName}";
+                break;
+            case ParameterType.Move:
+                if (ScriptDatabase.MoveNames.TryGetValue((ushort)value, out string moveName))
+                    return $"{moveName}";
+                break;
+            case ParameterType.Trainer:
+                if (ScriptDatabase.TrainerNames.TryGetValue((ushort)value, out string trainerName))
+                    return $"{trainerName}";
+                break;
+            case ParameterType.Function:
+                return $"Function#{value}";
+            case ParameterType.Action:
+                return $"Action#{value}";
+            case ParameterType.CMDNumber:
+                return $"CMD_{value:X3}";
+            case ParameterType.Overworld:
+                if (ScriptDatabase.SpecialOverworlds.TryGetValue((ushort)value, out string owName))
+                    return owName;
+                return value < 4000 ? $"{Event.EventType.Overworld}.{value}" : FormatHexNumber(value);
+            case ParameterType.OwMovementType:
+                return value < 4000 ? $"Move.{value}" : FormatHexNumber(value);
+            case ParameterType.OwMovementDirection:
+                // A direction can come from a variable (0x4000 and up), which must stay a number.
+                if (value <= byte.MaxValue && ScriptDatabase.OverworldDirections.TryGetValue((byte)value, out string dirName))
+                    return dirName;
+                break;
+            case ParameterType.ComparisonOperator:
+                if (value <= byte.MaxValue && RomInfo.ScriptComparisonOperatorsDict.TryGetValue((byte)value, out string compName))
+                    return compName;
+                break;
+            case ParameterType.Sound:
+                if (ScriptDatabase.SoundNames.TryGetValue((ushort)value, out string soundName))
+                    return soundName;
+                break;
+            case ParameterType.NpcTrade:
+                if (ScriptDatabase.NpcTradeNames.TryGetValue((ushort)value, out string tradeName))
+                    return tradeName;
+                return value.ToString();
+            case ParameterType.TrainerClass:
+                if (ScriptDatabase.TrainerClassNames.TryGetValue((ushort)value, out string className))
+                    return className;
+                break;
+        }
+
+        return FormatHexNumber(value);
+    }
+
+    private string FormatParameterAsID(uint value, ParameterType type)
+    {
+        switch (type)
+        {
+            case ParameterType.Function:
+                return $"Function#{value}";
+            case ParameterType.Action:
+                return $"Action#{value}";
+            case ParameterType.CMDNumber:
+                return $"CMD_{value:X3}";
+            case ParameterType.Overworld:
+                return value < 4000 ? $"{Event.EventType.Overworld}.{value}" : FormatHexNumber(value);
+            case ParameterType.OwMovementType:
+                return value < 4000 ? $"Move.{value}" : FormatHexNumber(value);
+        }
+
+        return FormatHexNumber(value);
+    }
+
+    private string FormatHexNumber(uint value)
+    {
+        // Nothing but the script editor cares how this reads, and anything parsing a script without a
+        // Callers without settings (the starter locator, tests) get the fallback.
+        int preference = SettingsManager.Settings?.ScriptEditorFormatPreference ?? (int)NumberStyles.None;
+        if (preference == (int)NumberStyles.HexNumber)
+        {
+            return $"0x{value:X}";
+        }
+        else if (preference == (int)NumberStyles.None)
+        {
+            return value >= 4000 ? $"0x{value:X}" : value.ToString();
+        }
+        return value.ToString();
+    }
+}

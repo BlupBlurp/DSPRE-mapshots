@@ -1,0 +1,146 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:DSPRE.Avalonia.ViewModels.World"
+        xmlns:controls="clr-namespace:DSPRE.Avalonia.Controls"
+        xmlns:gl="clr-namespace:DSPRE.Avalonia.Gl"
+        x:Class="DSPRE.Avalonia.Views.World.MatrixEditorView"
+        x:DataType="vm:MatrixEditorViewModel">
+
+  <Design.DataContext>
+    <vm:MatrixEditorViewModel/>
+  </Design.DataContext>
+
+  <DockPanel>
+    <controls:EditorToolbar>
+        <TextBlock Text="Matrix" VerticalAlignment="Center"/>
+        <controls:FusionAutoCompleteBox x:Name="FilePicker" Width="200" ItemsSource="{Binding MatrixNames}" SelectedIndex="{Binding SelectedMatrixIndex}"/>
+        <controls:HeadersButton controls:EditorToolbar.Slot="Picker" Source="Matrix" FileId="{Binding SelectedMatrixIndex}"/>
+        <Button Content="Save" controls:Icon.Key="saveButton"   Click="Save_Click" IsEnabled="{Binding HasUnsavedChanges}"/>
+        <Button Content="Discard" controls:Icon.Key="resetIcon" Click="Discard_Click" IsEnabled="{Binding HasUnsavedChanges}"/>
+        <controls:UndoRedoButtons/>
+        <Button Content="Add" controls:Icon.Key="addIcon" Click="AddMatrix_Click" ToolTip.Tip="Add an empty matrix at the end"/>
+        <Button Content="Remove last" controls:Icon.Key="deleteIcon" Click="RemoveMatrix_Click"
+                ToolTip.Tip="Deletes the highest-numbered matrix, unless a header still uses it"/>
+        <Button Content="Import…" controls:Icon.Key="import" Click="Import_Click"/>
+        <Button Content="Export…" controls:Icon.Key="export" Click="Export_Click"/>
+        <TextBlock Text="Name" VerticalAlignment="Center" Margin="6,0,0,0"/>
+        <TextBox Width="160" Text="{Binding MatrixName}" IsEnabled="{Binding HasMatrix}" MaxLength="127"/>
+        <TextBlock Text="Size" VerticalAlignment="Center" Margin="6,0,0,0"/>
+        <NumericUpDown controls:EditorToolbar.Slot="Extra" Width="110" Minimum="1" Maximum="255" Increment="1" FormatString="0" Value="{Binding SizeWidth}"
+                       IsEnabled="{Binding HasMatrix}" ToolTip.Tip="Width in maps. New cells are empty."/>
+        <TextBlock Text="×" VerticalAlignment="Center"/>
+        <NumericUpDown controls:EditorToolbar.Slot="Extra" Width="110" Minimum="1" Maximum="255" Increment="1" FormatString="0" Value="{Binding SizeHeight}"
+                       IsEnabled="{Binding HasMatrix}" ToolTip.Tip="Height in maps. New cells are empty."/>
+        <Button x:Name="SpawnButton" Content="Set spawn to selection" controls:Icon.Key="pin" Click="SetSpawn_Click"
+                ToolTip.Tip="Set the game's start position to the selected matrix cell"/>
+    </controls:EditorToolbar>
+
+    <Border DockPanel.Dock="Bottom" Background="{DynamicResource Editor.StatusBg}" BorderBrush="{DynamicResource Editor.Border}" BorderThickness="0,1,0,0" Padding="8,3">
+      <StackPanel Orientation="Horizontal" Spacing="12">
+        <TextBlock Text="{Binding StatusText}" FontSize="12" Foreground="{DynamicResource Editor.Subtle}" VerticalAlignment="Center"/>
+        <TextBlock Text="{Binding CellInfo}" FontSize="12" Foreground="{DynamicResource Editor.Subtle}" VerticalAlignment="Center"/>
+      </StackPanel>
+    </Border>
+
+    <TextBlock DockPanel.Dock="Top" Text="{Binding SizeWarning}" IsVisible="{Binding HasSizeWarning}" TextWrapping="Wrap"
+               Foreground="{DynamicResource Editor.Warning}" Margin="8,6,8,0"/>
+
+    <TabControl Margin="4">
+      <TabItem Header="Maps">
+        <DockPanel Margin="4">
+          <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="6" Margin="0,0,0,6">
+            <ToggleButton x:Name="PaintToggle" Content="Paint" controls:Icon.Key="brush" IsChecked="{Binding PaintMode}"
+                          ToolTip.Tip="Click or drag to fill cells with the value beside it"/>
+            <NumericUpDown Width="130" Minimum="0" Maximum="65535" Increment="1" FormatString="0" Value="{Binding MapPaint}"
+                           ToolTip.Tip="The value Paint fills cells with"/>
+          </StackPanel>
+          <ItemsControl x:Name="LegendBar" DockPanel.Dock="Top" ItemsSource="{Binding Legend}" Margin="0,0,0,6">
+            <ItemsControl.ItemsPanel>
+              <ItemsPanelTemplate><WrapPanel ItemSpacing="14" LineSpacing="4"/></ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="vm:MatrixEditorViewModel+LegendEntry">
+                <StackPanel Orientation="Horizontal" Spacing="5">
+                  <Border Width="14" Height="14" CornerRadius="3" Background="{Binding Brush}" VerticalAlignment="Center"/>
+                  <TextBlock Text="{Binding Name}" VerticalAlignment="Center" FontSize="12"/>
+                </StackPanel>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+          <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+            <gl:MatrixGridControl x:Name="MapGrid"/>
+          </ScrollViewer>
+        </DockPanel>
+      </TabItem>
+
+      <TabItem Header="Headers">
+        <Panel Margin="4">
+          <DockPanel IsVisible="{Binding HasHeaders}">
+          <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="6" Margin="0,0,0,6">
+            <ToggleButton Content="Paint" controls:Icon.Key="brush" IsChecked="{Binding PaintMode}"
+                          ToolTip.Tip="Click or drag to fill cells with the value beside it"/>
+            <NumericUpDown Width="130" Minimum="0" Maximum="65535" Increment="1" FormatString="0" Value="{Binding HeaderPaint}"
+                           ToolTip.Tip="The value Paint fills cells with"/>
+            <Button Content="Remove section" controls:Icon.Key="deleteIcon" Click="RemoveHeaders_Click"
+                    ToolTip.Tip="Every cell then uses the header that loads the matrix"/>
+          </StackPanel>
+          <ItemsControl DockPanel.Dock="Top" ItemsSource="{Binding Legend}" Margin="0,0,0,6">
+            <ItemsControl.ItemsPanel>
+              <ItemsPanelTemplate><WrapPanel ItemSpacing="14" LineSpacing="4"/></ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="vm:MatrixEditorViewModel+LegendEntry">
+                <StackPanel Orientation="Horizontal" Spacing="5">
+                  <Border Width="14" Height="14" CornerRadius="3" Background="{Binding Brush}" VerticalAlignment="Center"/>
+                  <TextBlock Text="{Binding Name}" VerticalAlignment="Center" FontSize="12"/>
+                </StackPanel>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+            <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+              <gl:MatrixGridControl x:Name="HeaderGrid"/>
+            </ScrollViewer>
+          </DockPanel>
+          <StackPanel IsVisible="{Binding CanAddHeaders}" Spacing="8" Margin="6">
+            <Button Content="Add header section" controls:Icon.Key="addIcon" Click="AddHeaders_Click" HorizontalAlignment="Left"
+                    ToolTip.Tip="Without one, every cell uses the header that loads the matrix"/>
+          </StackPanel>
+        </Panel>
+      </TabItem>
+
+      <TabItem Header="Heights">
+        <Panel Margin="4">
+          <DockPanel IsVisible="{Binding HasHeights}">
+          <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="6" Margin="0,0,0,6">
+            <ToggleButton Content="Paint" controls:Icon.Key="brush" IsChecked="{Binding PaintMode}"
+                          ToolTip.Tip="Click or drag to fill cells with the value beside it"/>
+            <NumericUpDown Width="110" Minimum="0" Maximum="255" Increment="1" FormatString="0" Value="{Binding HeightPaint}"
+                           ToolTip.Tip="The value Paint fills cells with"/>
+            <Button Content="Remove section" controls:Icon.Key="deleteIcon" Click="RemoveHeights_Click"
+                    ToolTip.Tip="Every map then sits at height 0"/>
+          </StackPanel>
+            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="6" Margin="0,0,0,6">
+              <TextBlock Text="0" FontSize="12" VerticalAlignment="Center"/>
+              <Border Width="160" Height="14" CornerRadius="3" VerticalAlignment="Center">
+                <Border.Background>
+                  <LinearGradientBrush StartPoint="0%,50%" EndPoint="100%,50%">
+                    <GradientStop Color="#2A4A8C" Offset="0"/>
+                    <GradientStop Color="#BA6A2C" Offset="1"/>
+                  </LinearGradientBrush>
+                </Border.Background>
+              </Border>
+              <TextBlock Text="32 and up" FontSize="12" VerticalAlignment="Center"/>
+            </StackPanel>
+            <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+              <gl:MatrixGridControl x:Name="HeightGrid"/>
+            </ScrollViewer>
+          </DockPanel>
+          <StackPanel IsVisible="{Binding CanAddHeights}" Spacing="8" Margin="6">
+            <Button Content="Add height section" controls:Icon.Key="addIcon" Click="AddHeights_Click" HorizontalAlignment="Left"
+                    ToolTip.Tip="Without one, every map sits at height 0"/>
+          </StackPanel>
+        </Panel>
+      </TabItem>
+    </TabControl>
+  </DockPanel>
+</UserControl>

@@ -1,0 +1,42 @@
+using Avalonia.Controls;
+using Avalonia.Interactivity;
+using DSPRE.Avalonia.Models;
+using DSPRE.Avalonia.ViewModels;
+
+namespace DSPRE.Avalonia.Views.World
+{
+    /// <summary>The shared header-tree sidebar (used by the Header editor and the Maps workspace).</summary>
+    public partial class HeaderSidebarView : UserControl
+    {
+        private HeaderEditorViewModel VM => DataContext as HeaderEditorViewModel;
+
+        public HeaderSidebarView() => InitializeComponent();
+
+        private void ExpandAll_Click(object sender, RoutedEventArgs e) => VM?.ExpandAllFolders();
+        private void CollapseAll_Click(object sender, RoutedEventArgs e) => VM?.CollapseAllFolders();
+
+        // Results go to the view this list belongs to: the main grouped view or the Header editor window.
+        private void Search_Click(object sender, RoutedEventArgs e)
+        {
+            HeaderEditorViewModel vm = VM;
+            if (vm != null) AvaloniaEditorLauncher.OpenHeaderSearchFor(id => vm.GoToHeader(id));
+        }
+
+        // Right-click selects the header first, so the menu opens the editor on it.
+        private void CtxOpen(object sender, System.Action<HeaderEditorViewModel> open)
+        {
+            HeaderEditorViewModel vm = VM;
+            HeaderTreeLeaf leaf = (sender as MenuItem)?.DataContext as Models.HeaderTreeLeaf;
+            if (vm == null || leaf == null) return;
+            vm.SelectedTreeNode = leaf;   // loads the header; the workspace follows
+            open(vm);
+        }
+
+        private void CtxOpenMap_Click(object sender, RoutedEventArgs e) => CtxOpen(sender, _ => AvaloniaEditorLauncher.OpenMapEditor());
+        private void CtxOpenEvents_Click(object sender, RoutedEventArgs e) => CtxOpen(sender, vm => vm.OpenEvents());
+        private void CtxOpenScripts_Click(object sender, RoutedEventArgs e) => CtxOpen(sender, vm => vm.OpenScripts());
+        private void CtxOpenTexts_Click(object sender, RoutedEventArgs e) => CtxOpen(sender, vm => vm.OpenTexts());
+        private void CtxOpenEncounters_Click(object sender, RoutedEventArgs e) => CtxOpen(sender, vm => vm.OpenEncounters());
+        private void CtxOpenMatrix_Click(object sender, RoutedEventArgs e) => CtxOpen(sender, vm => vm.OpenMatrix());
+    }
+}

@@ -1,0 +1,204 @@
+using System;
+using System.Collections.Generic;
+using System.Collections.ObjectModel;
+using System.ComponentModel;
+using System.Linq;
+using System.Runtime.CompilerServices;
+using Avalonia.Media.Imaging;
+using DSPRE.Avalonia.Data;
+
+namespace DSPRE.Avalonia.ViewModels.Battle
+{
+    /// <summary>The battle scenery of every place in the game, with the data that chooses it.</summary>
+    public sealed class BattleSceneBrowserViewModel : INotifyPropertyChanged
+    {
+        public event PropertyChangedEventHandler PropertyChanged;
+        private void OnPropertyChanged([CallerMemberName] string n = null)
+            => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(n));
+        private bool Set<T>(ref T f, T v, [CallerMemberName] string n = null)
+        {
+            if (EqualityComparer<T>.Default.Equals(f, v)) return false;
+            f = v; OnPropertyChanged(n); return true;
+        }
+
+        private readonly BattleBgRenderer _backdrops = new();
+        private readonly BattleGroundRenderer _grounds = new();
+
+        public BattleSceneBrowserViewModel() => Reload();
+
+        public ObservableCollection<BattleScenes.Scene> Scenes { get; } = new();
+
+        public void Reload()
+        {
+            Scenes.Clear();
+            try { foreach (BattleScenes.Scene s in BattleScenes.Read()) Scenes.Add(s); }
+            catch (Exception ex) { AppLogger.Error("BattleSceneBrowser.Reload: " + ex.Message); }
+
+            Terrains.Clear();
+            for (int t = 0; t < BattleGroundRenderer.TerrainCount; t++)
+                Terrains.Add(BattleGroundRenderer.TerrainNames[t]);
+
+            OnPropertyChanged(nameof(FoundSummary));
+            Selected = Scenes.FirstOrDefault();
+        }
+
+        public string FoundSummary => Scenes.Count == 0
+            ? "This game has no battle scenery DSPRE can list. Open a ROM first."
+            : $"{Scenes.Count} sets of battle scenery. A map header picks one by the number beside it.";
+
+        private BattleScenes.Scene _selected;
+        public BattleScenes.Scene Selected
+        {
+            get => _selected;
+            set { if (Set(ref _selected, value)) Look(); }
+        }
+
+        public ObservableCollection<string> Terrains { get; } = new();
+
+        private int _terrainIndex = 2;      // Lawn, used by most places
+        public int TerrainIndex
+        {
+            get => _terrainIndex;
+            set { if (Set(ref _terrainIndex, value)) Look(); }
+        }
+
+        private int _timeOfDay;
+        /// <summary>0 day, 1 evening, 2 night. Each set of scenery is painted three ways.</summary>
+        public int TimeOfDay
+        {
+            get => _timeOfDay;
+            set { if (Set(ref _timeOfDay, value)) Look(); }
+        }
+
+        public ObservableCollection<string> TimesOfDay { get; } = new() { "Day", "Evening", "Night" };
+
+        private Bitmap _picture;
+        public Bitmap Picture { get => _picture; private set => Set(ref _picture, value); }
+
+        private string _whynot = "";
+        public string Whynot { get => _whynot; private set => Set(ref _whynot, value); }
+        public bool HasPicture => _picture != null;
+        public bool HasNoPicture => _picture == null && !string.IsNullOrEmpty(_whynot);
+
+        private string _details = "Pick a place on the left to see its battle scenery.";
+        public string Details { get => _details; private set => Set(ref _details, value); }
+
+        public ObservableCollection<DetailFact> Facts { get; } = new();
+
+        /// <summary>Every place whose battles use this scenery.</summary>
+        public ObservableCollection<string> Places { get; } = new();
+
+        private string _placesHeader = "";
+        public string PlacesHeader { get => _placesHeader; private set => Set(ref _placesHeader, value); }
+
+        private bool _hasPlaces;
+        public bool HasPlaces { get => _hasPlaces; private set => Set(ref _hasPlaces, value); }
+
+        private void Look()
+        {
+            Picture = null;
+            Whynot = "";
+            if (_selected == null)
+            {
+                Details = "Pick a place on the left to see it.";
+                Facts.Clear();
+                Places.Clear();
+                HasPlaces = false;
+                RaiseAll();
+                return;
+            }
+
+            BattleScenes.Scene s = _selected;
+            Details = "";
+            Facts.Clear();
+            Facts.Add(new DetailFact("Scenery", s.BackgroundId.ToString()));
+            Facts.Add(new DetailFact("Drawing", s.Drawing.ToString()));
+            Facts.Add(new DetailFact("Arrangement", s.Arrangement.ToString()));
+            Facts.Add(new DetailFact("Palette", (s.PaletteDay + _timeOfDay).ToString()));
+            Facts.Add(new DetailFact("Headers", s.Headers.Count == 0 ? "None" : s.Headers.Count.ToString()));
+
+            // The whole list in a scrolling box, not cut off at forty.
+            Places.Clear();
+            for (int i = 0; i < s.Headers.Count; i++)
+            {
+                string name = i < s.PlaceNames.Count ? s.PlaceNames[i] : "Header " + s.Headers[i];
+                Places.Add($"{name} (header {s.Headers[i]})");
+            }
+            HasPlaces = Places.Count > 0;
+            PlacesHeader = $"Headers ({Places.Count})";
+
+            try
+            {
+                BattleBgRenderer.BgImage bg = _backdrops.BuildBackdrop(s.BackgroundId, _timeOfDay);
+                if (bg?.Rgba == null)
+                {
+                    Whynot = "Unreadable palette";
+                    RaiseAll();
+                    return;
+                }
+
+                (byte[] Rgba, int Width, int Height) scene = Compose(bg);
+                Picture = ImageConverter.FromRgba(scene.Rgba, scene.Width, scene.Height);
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Error("BattleSceneBrowser.Look: " + ex.Message);
+                Whynot = "This scenery couldn't be drawn.";
+            }
+            RaiseAll();
+        }
+
+        /// <summary>What one screen of a battle looks like. </summary>
+        private const int ScreenWidth = 256, ScreenHeight = 192;
+
+        /// <summary>Puts the ground over the backdrop, cropped to the screen, as a battle looks before anyone
+        /// is in it.</summary>
+        private (byte[] Rgba, int Width, int Height) Compose(BattleBgRenderer.BgImage bg)
+        {
+            int w = Math.Min(ScreenWidth, bg.Width), h = Math.Min(ScreenHeight, bg.Height);
+            byte[] outp = new byte[w * h * 4];
+            for (int y = 0; y < h; y++)
+                Array.Copy(bg.Rgba, y * bg.Width * 4, outp, y * w * 4, w * 4);
+
+            (BattleGroundRenderer.GroundImage mine, BattleGroundRenderer.GroundImage enemy) = _grounds.Build(_terrainIndex, _timeOfDay);
+            foreach (BattleGroundRenderer.GroundImage piece in new[] { enemy, mine })
+            {
+                if (piece?.Rgba == null) continue;
+                for (int y = 0; y < piece.Height; y++)
+                {
+                    int ty = piece.Top + y;
+                    if (ty < 0 || ty >= h) continue;
+                    for (int x = 0; x < piece.Width; x++)
+                    {
+                        int tx = piece.Left + x;
+                        if (tx < 0 || tx >= w) continue;
+                        int from = (y * piece.Width + x) * 4, to = (ty * w + tx) * 4;
+                        if (piece.Rgba[from + 3] == 0) continue;
+                        outp[to] = piece.Rgba[from];
+                        outp[to + 1] = piece.Rgba[from + 1];
+                        outp[to + 2] = piece.Rgba[from + 2];
+                        outp[to + 3] = 255;
+                    }
+                }
+            }
+            return (outp, w, h);
+        }
+
+        private void RaiseAll()
+        {
+            OnPropertyChanged(nameof(HasPicture));
+            OnPropertyChanged(nameof(HasNoPicture));
+        }
+
+        private string _status = "";
+        public string StatusText { get => _status; set => Set(ref _status, value); }
+
+        /// <summary>Which file All graphics should open for the piece asked for.</summary>
+        public int FileFor(string piece) => _selected == null ? -1 : piece switch
+        {
+            "drawing" => _selected.Drawing,
+            "colours" => _selected.PaletteDay + _timeOfDay,
+            _ => _selected.Arrangement,
+        };
+    }
+}

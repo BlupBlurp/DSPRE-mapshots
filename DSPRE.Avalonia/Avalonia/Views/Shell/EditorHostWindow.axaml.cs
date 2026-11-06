@@ -1,0 +1,89 @@
+using Avalonia.Controls;
+using Avalonia.Input;
+using DSPRE.Editors;
+
+namespace DSPRE.Avalonia.Views.Shell
+{
+    /// <summary>
+    /// Shows a <see cref="UserControl"/> editor in its own window and forwards the unsaved-changes guard to
+    /// its <see cref="IEditorWithUnsavedChanges"/> view model.
+    /// </summary>
+    public class EditorHostWindow : Window
+    {
+        private bool _closeConfirmed;
+
+        private static readonly System.Collections.Generic.Dictionary<string, (double, double)> MinimumFor = new()
+        {
+            ["Mart editor"] = (860, 500), ["Header editor"] = (1180, 560), ["Matrix editor"] = (720, 500),
+            ["Map editor"] = (1000, 600), ["Event editor"] = (1000, 600), ["Vs. Seeker rematch editor"] = (720, 460),
+            ["Camera editor"] = (840, 480), ["Battle scripts"] = (1100, 400), ["Screens"] = (980, 400),
+            ["Pokégear phone book"] = (900, 400), ["Pokégear rematch editor"] = (700, 400), ["Text editor"] = (760, 400),
+            ["Trainer flag bulk editor"] = (660, 400), ["Battle Tower editor"] = (640, 400),
+        };
+
+        public EditorHostWindow() { }
+
+        public EditorHostWindow(string title, Control content, double width = 900, double height = 700)
+        {
+            Title = title;
+            // An editor listed here needs that much room to show its content, so it opens at least that big;
+            // anything else gets a general floor that never exceeds its own opening size.
+            if (MinimumFor.TryGetValue(title ?? "", out (double, double) m))
+            {
+                width = System.Math.Max(width, m.Item1);
+                height = System.Math.Max(height, m.Item2);
+                MinWidth = m.Item1;
+                MinHeight = m.Item2;
+            }
+            else
+            {
+                MinWidth = System.Math.Min(width, 600);
+                MinHeight = System.Math.Min(height, 400);
+            }
+            Width = width;
+            Height = height;
+            WindowStartupLocation = WindowStartupLocation.CenterScreen;
+            Content = content;
+
+            if (content?.DataContext is IEditorWithUnsavedChanges editor)
+            {
+                string baseTitle = title ?? "";
+                void UpdateTitle() => Title = (editor.HasUnsavedChanges ? "● " : "") + baseTitle;
+                UpdateTitle();
+                if (editor is System.ComponentModel.INotifyPropertyChanged inpc)
+                    inpc.PropertyChanged += (_, e) =>
+                    {
+                        if (e.PropertyName == nameof(IEditorWithUnsavedChanges.HasUnsavedChanges)) UpdateTitle();
+                    };
+
+                KeyBindings.Add(new KeyBinding
+                {
+                    Gesture = new KeyGesture(Key.S, KeyModifiers.Control),
+                    Command = new DSPRE.Avalonia.EditorWindowChrome.RelayCommand(() =>
+                    {
+                        if (editor.HasUnsavedChanges)
+                            _ = DSPRE.Avalonia.EditorWindowChrome.TrySaveChangesAsync(editor, "saving");
+                    }),
+                });
+            }
+
+            // Hosted UserControl editors don't get EditorWindowChrome; forward Ctrl+Z / Ctrl+Y here when
+            // their VM supports undo (e.g. the Header editor).
+            if (content?.DataContext is DSPRE.Avalonia.ISupportsUndo undo)
+                DSPRE.Avalonia.EditorWindowChrome.AttachUndoKeys(this, undo);
+        }
+
+        protected override async void OnClosing(WindowClosingEventArgs e)
+        {
+            if (!_closeConfirmed && Content is Control c && c.DataContext is IEditorWithUnsavedChanges ed && ed.HasUnsavedChanges)
+            {
+                e.Cancel = true;
+                if (!await global::DSPRE.Avalonia.UnsavedChangesDialog.ShowIfNeededAsync(this, ed, Title))
+                    return;
+                _closeConfirmed = true; Close();
+                return;
+            }
+            base.OnClosing(e);
+        }
+    }
+}

@@ -1,0 +1,207 @@
+using System;
+using System.ComponentModel;
+using System.IO;
+
+namespace DSPRE.ROMFiles
+{
+    // Battle Tower Pokemon set: species/moves/nature/EVs/item/form. 16 bytes, one file per set.
+    public class BattleTowerPokemonSet
+    {
+        public ushort Species { get; set; }
+        public ushort[] Moves { get; set; } = new ushort[4];
+        public byte EvFlags { get; set; }
+        public byte Nature { get; set; }
+        public ushort Item { get; set; }
+        public ushort Form { get; set; }
+        // A file too short to parse, written back unchanged until the set is edited.
+        public byte[] UnreadBytes { get; set; }
+
+        public static readonly string[] NatureNames = {
+            "Hardy", "Lonely", "Brave", "Adamant", "Naughty",
+            "Bold", "Docile", "Relaxed", "Impish", "Lax",
+            "Timid", "Hasty", "Serious", "Jolly", "Naive",
+            "Modest", "Mild", "Quiet", "Bashful", "Rash",
+            "Calm", "Gentle", "Sassy", "Careful", "Quirky"
+        };
+
+        public static readonly string[] EvStatNames = { "HP", "Attack", "Defense", "Speed", "Sp. Atk", "Sp. Def" };
+
+        public BattleTowerPokemonSet() { }
+
+        public BattleTowerPokemonSet(BinaryReader br)
+        {
+            Species = br.ReadUInt16();
+            for (int i = 0; i < 4; i++)
+            {
+                Moves[i] = br.ReadUInt16();
+            }
+            EvFlags = br.ReadByte();
+            Nature = br.ReadByte();
+            Item = br.ReadUInt16();
+            Form = br.ReadUInt16();
+        }
+
+        public void Write(BinaryWriter bw, bool keepUnread = true)
+        {
+            if (keepUnread && UnreadBytes != null)
+            {
+                bw.Write(UnreadBytes);
+                return;
+            }
+            bw.Write(Species);
+            for (int i = 0; i < 4; i++)
+            {
+                bw.Write(Moves[i]);
+            }
+            bw.Write(EvFlags);
+            bw.Write(Nature);
+            bw.Write(Item);
+            bw.Write(Form);
+        }
+
+        public override string ToString()
+        {
+            string[] pokemonNames = RomInfo.GetPokemonNames();
+            return Species < pokemonNames.Length ? pokemonNames[Species] : $"Pokémon {Species}";
+        }
+    }
+
+    public class BattleTowerPokemonSetFile : RomFile
+    {
+        public const int EntrySize = 16;
+
+        public BindingList<BattleTowerPokemonSet> Sets { get; private set; } = new BindingList<BattleTowerPokemonSet>();
+
+        public BattleTowerPokemonSetFile() { }
+
+        public BattleTowerPokemonSetFile(bool load)
+        {
+            if (load)
+            {
+                LoadFromNarc();
+            }
+        }
+
+        private void LoadFromNarc()
+        {
+            string narcDir = Filesystem.BattleTowerPokemon;
+            if (string.IsNullOrEmpty(narcDir) || !Directory.Exists(narcDir))
+            {
+                return;
+            }
+
+            Sets.Clear();
+            string[] files = Directory.GetFiles(narcDir);
+            Array.Sort(files, StringComparer.OrdinalIgnoreCase);
+
+            foreach (string filePath in files)
+            {
+                using (FileStream fs = new FileStream(filePath, FileMode.Open, FileAccess.Read))
+                using (BinaryReader br = new BinaryReader(fs))
+                {
+                    // A short file still takes its slot, since trainers refer to sets by index.
+                    Sets.Add(fs.Length < EntrySize
+                        ? new BattleTowerPokemonSet { UnreadBytes = br.ReadBytes((int)fs.Length) }
+                        : new BattleTowerPokemonSet(br));
+                }
+            }
+        }
+
+        public override byte[] ToByteArray()
+        {
+            using (MemoryStream ms = new MemoryStream())
+            using (BinaryWriter bw = new BinaryWriter(ms))
+            {
+                foreach (BattleTowerPokemonSet set in Sets)
+                {
+                    set.Write(bw, keepUnread: false);
+                }
+                return ms.ToArray();
+            }
+        }
+
+        public bool SaveToNarc(bool showSuccessMessage = true)
+        {
+            string error = Save();
+            if (error != null)
+            {
+                AppMessages.Error("The Battle Tower Pokémon sets weren't saved:\n" + error, "Battle Tower");
+                return false;
+            }
+            if (showSuccessMessage) AppMessages.Notice("Battle Tower Pokémon sets saved.");
+            return true;
+        }
+
+        /// <returns>null when saved, else why not.</returns>
+        public string Save()
+        {
+            try
+            {
+                string narcDir = Filesystem.BattleTowerPokemon;
+                if (string.IsNullOrEmpty(narcDir) || !Directory.Exists(narcDir))
+                    return "The Battle Tower Pokémon set folder wasn't found.";
+
+                for (int i = 0; i < Sets.Count; i++)
+                {
+                    using (MemoryStream ms = new MemoryStream())
+                    using (BinaryWriter bw = new BinaryWriter(ms))
+                    {
+                        Sets[i].Write(bw);
+                        ArchiveMembers.Put(RomInfo.DirNames.BattleTowerPokemon, i, ms.ToArray());
+                    }
+                }
+                return null;
+            }
+            catch (Exception ex)
+            {
+                return ex.Message;
+            }
+        }
+
+        public bool ExportToFile(string path, bool showSuccessMessage = true)
+        {
+            try
+            {
+                ArchiveMembers.Write(path, ToByteArray());
+
+                if (showSuccessMessage)
+                {
+                    AppMessages.Notice("Battle Tower Pokémon sets exported.");
+                }
+                return true;
+            }
+            catch (Exception ex)
+            {
+                AppMessages.Error($"Couldn't export the Battle Tower Pokémon sets: {ex.Message}", "Battle Tower editor");
+                return false;
+            }
+        }
+
+        public bool ImportFromFile(string path)
+        {
+            try
+            {
+                using (FileStream fs = new FileStream(path, FileMode.Open, FileAccess.Read))
+                using (BinaryReader br = new BinaryReader(fs))
+                {
+                    Sets.Clear();
+                    while (fs.Position + EntrySize <= fs.Length)
+                    {
+                        Sets.Add(new BattleTowerPokemonSet(br));
+                    }
+                }
+                return true;
+            }
+            catch (Exception ex)
+            {
+                AppMessages.Error($"Couldn't import the Battle Tower Pokémon sets: {ex.Message}", "Battle Tower editor");
+                return false;
+            }
+        }
+
+        public static bool IsAvailable()
+        {
+            return !RomInfo.IsHGE && RomInfo.GameDirs.ContainsKey(RomInfo.DirNames.BattleTowerPokemon);
+        }
+    }
+}

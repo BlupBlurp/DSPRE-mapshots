@@ -1,0 +1,344 @@
+using System.Linq;
+﻿using System;
+using System.ComponentModel;
+using System.Threading.Tasks;
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Input;
+using Avalonia.Input.Platform;
+using Avalonia.Interactivity;
+using DSPRE.Avalonia.Gl;
+using DSPRE.ROMFiles;
+using DSPRE.Avalonia.ViewModels;
+using System.Collections.Generic;
+
+namespace DSPRE.Avalonia.Views.World
+{
+    public partial class MapEditorView : UserControl
+    {
+        private MapEditorViewModel VM => DataContext as MapEditorViewModel;
+        private bool _setupDone;
+        private Gl3DPointerNavigation _nav;
+
+        public MapEditorView()
+        {
+            InitializeComponent();
+            DSPRE.Avalonia.Controls.SidePanelWidth.Remember(SplitGrid, () => SettingsManager.Settings.MapEditorSidePanelWidth,
+                w => SettingsManager.Settings.MapEditorSidePanelWidth = w);
+            CollisionThumb.IsCollision = true;
+            TypeThumb.IsCollision = false;
+            PermGrid.Changed += (_, _) =>
+            {
+                VM?.MarkDirty(); VM?.RebuildOverlay();
+                CollisionThumb.InvalidateVisual(); TypeThumb.InvalidateVisual();
+            };
+            PermGrid.Hovered += (_, at) => VM?.HoverPermission(at);
+            PermGrid.Picked += (_, value) =>
+            {
+                if (VM == null) return;
+                if (VM.PermissionShowsType) VM.TypeValue = value;
+                else VM.CollisionValue = value;
+            };
+
+            // Left-drag pans, right-drag orbits, wheel zooms. In 3D edit mode a left-press grabs a
+            // gizmo axis (to drag the building) or picks a building. See Gl3DPointerNavigation.
+            _nav = new Gl3DPointerNavigation(GlHost, GlView)
+            {
+                IsPaintModeActive = () => VM?.PaintMode == true,
+                PaintAt = PaintAt,
+                IsEditModeActive = () => VM?.EditMode3D == true,
+                Pick = pos => { int b = PickBuilding(pos); if (b >= 0 && VM != null) VM.SelectedBuildingIndex = b; },
+                Click = pos =>
+                {
+                    if (VM == null) return;
+                    int b = GlView.ScreenToRay((float)pos.X, (float)pos.Y, out float ox, out float oy, out float oz, out float dx, out float dy, out float dz)
+                        ? VM.BuildingAlong(ox, oy, oz, dx, dy, dz) : -1;
+                    if (b < 0) b = PickBuilding(pos);
+                    if (b >= 0) VM.SelectedBuildingIndex = b;
+                },
+                NudgeAxis = (axis, normDelta) =>
+                {
+                    if (VM == null) return;
+                    float scale = VM.ModelScale; if (scale <= 0) scale = 1f;
+                    VM.NudgeSelectedBuildingRaw(axis, normDelta / scale);
+                },
+            };
+
+            // Arrow keys act only while the 3D view has focus, so side-panel inputs keep theirs.
+            GlHost.KeyDown += OnKeyDown;
+
+            Loaded += OnLoadedSetup;
+        }
+
+        private void OnKeyDown(object sender, KeyEventArgs e)
+        {
+            // In edit mode with a building selected, arrow keys nudge the building one tile along world
+            // X/Z (intuitive in the top-down view). Otherwise they pan the camera.
+            if (VM != null && VM.EditMode3D && VM.HasBuildingSelected)
+            {
+                switch (e.Key)
+                {
+                    case Key.Left:  VM.NudgeSelectedBuildingTiles(-1, 0); e.Handled = true; return;
+                    case Key.Right: VM.NudgeSelectedBuildingTiles(1, 0);  e.Handled = true; return;
+                    case Key.Up:    VM.NudgeSelectedBuildingTiles(0, -1); e.Handled = true; return;
+                    case Key.Down:  VM.NudgeSelectedBuildingTiles(0, 1);  e.Handled = true; return;
+                }
+            }
+            const float step = 24f;
+            switch (e.Key)
+            {
+                case Key.Left:  GlView.PanByScreen(step, 0); e.Handled = true; break;
+                case Key.Right: GlView.PanByScreen(-step, 0); e.Handled = true; break;
+                case Key.Up:    GlView.PanByScreen(0, step); e.Handled = true; break;
+                case Key.Down:  GlView.PanByScreen(0, -step); e.Handled = true; break;
+            }
+        }
+
+        /// <summary>2D locks the camera flat and drops perspective; 3D restores a normal orbit camera.</summary>
+        private void ApplyViewMode()
+        {
+            if (VM == null) return;
+            GlView.Orthographic = VM.Flat2D;
+            if (VM.Flat2D) GlView.SetOrientation(0f, 90f);
+        }
+
+        private void RotationPatch_Click(object sender, RoutedEventArgs e) => AvaloniaEditorLauncher.OpenPatchToolboxAt("buildingRotation");
+        private void CamTop_Click(object sender, RoutedEventArgs e) => GlView.SetOrientation(0f, 89f);
+        private void CamIso_Click(object sender, RoutedEventArgs e) => GlView.SetOrientation(30f, 30f);
+        private void CamFront_Click(object sender, RoutedEventArgs e) => GlView.SetOrientation(0f, 8f);
+        private void CamSide_Click(object sender, RoutedEventArgs e) => GlView.SetOrientation(90f, 8f);
+        private void CamReset_Click(object sender, RoutedEventArgs e) { GlView.SetOrientation(30f, 20f); GlView.ResetView(); }
+
+        public MapEditorView(MapEditorViewModel vm) : this()
+        {
+            DataContext = vm;
+        }
+
+        private async void OnLoadedSetup(object sender, RoutedEventArgs e)
+        {
+            if (!_setupDone) await EnsureSetupAsync();
+        }
+
+        /// <summary>Sets up the view model once a ROM is loaded; <see cref="MapsWorkspaceView"/> calls it after
+        /// every load. Events are wired once.</summary>
+        /// <param name="ownerOverride">The owning window, for a tab not attached yet, which has no TopLevel.</param>
+        public async Task EnsureSetupAsync(Window ownerOverride = null)
+        {
+            if (Design.IsDesignMode) return;
+            MapEditorViewModel vm = VM;
+            if (vm == null || !AvaloniaEditorLauncher.IsRomLoaded) return;
+            Window owner = ownerOverride ?? TopLevel.GetTopLevel(this) as Window;
+            if (owner == null) return;
+
+            if (!_setupDone)
+            {
+                _setupDone = true;
+                vm.MapLoaded += OnMapLoaded;
+                vm.OverlayChanged += (_, _) =>
+                {
+                    GlView.SetOverlay(VM.OverlayMesh, VM.OverlayVertexCount);
+                    GlView.OverlayAlpha = VM.TintStrength;
+                    GlView.SetTileTint(VM.TintOn, VM.TintStrength, VM.TintOx, VM.TintOz, VM.TintSx, VM.TintSz, VM.TintRgba);
+                };
+                vm.PaintModeChanged += (_, _) => { if (VM.PaintMode) GlView.SetOrientation(0f, 89f); };   // lock to Top
+                vm.ViewModeChanged += (_, _) => ApplyViewMode();
+                vm.PaintedTile += (_, _) => ShowPermissions();
+                vm.PropertyChanged += OnVmPropertyChanged;
+                GlView.ShowTextures = vm.ShowTextures;
+                GlView.ShowTileGrid = vm.ShowTileGrid;
+                vm.EditModeChanged += (_, _) => RefreshGizmo();
+                vm.GizmoTargetChanged += (_, _) => RefreshGizmo();
+            }
+            await vm.SetupAsync(owner);
+            ApplyViewMode();
+        }
+
+        private void ShowPermissions()
+        {
+            if (VM == null) return;
+            bool type = VM.PermissionShowsType;
+            CollisionThumb.SetData(VM.Collisions);
+            TypeThumb.SetData(VM.Types);
+            PermGrid.IsCollision = !type;
+            PermGrid.SetData(type ? VM.Types : VM.Collisions);
+            PermGrid.PaintValue = type ? VM.TypePaintValue : VM.CollisionPaintValue;
+        }
+
+        private void OnMapLoaded(object sender, EventArgs e)
+        {
+            ShowPermissions();
+            GlView.SetModel(VM.Model3D);
+            GlView.BuildingAnimator = BuildingAnimatorFor(VM.Model3D);
+            RefreshGizmo();
+        }
+
+        // Every edit rebuilds the scene and lands here, so the animator always matches the geometry shown.
+        private SceneBuildingAnimator BuildingAnimatorFor(NsbmdRenderModel scene)
+        {
+            if (scene == null) return null;
+            bool indoor = RomInfo.GameFamily == RomInfo.GameFamilies.HGSS && VM.AreaIndoor;
+            try { return new SceneBuildingAnimator(scene, indoor, FieldTimeOfDay.Now); }
+            catch (Exception ex)
+            {
+                AppLogger.Warn("Building animations for the map view: " + ex.Message);
+                return null;
+            }
+        }
+
+        /// <summary>Syncs the GL control's translate gizmo with the VM's edit mode + selected building.</summary>
+        private void RefreshGizmo()
+        {
+            if (VM == null) return;
+            GlView.EditMode = VM.EditMode3D;
+            if (VM.EditMode3D && VM.TrySelectedBuildingAnchorNorm(out float nx, out float ny, out float nz))
+                GlView.SetGizmoTarget(nx, ny, nz);
+            else
+                GlView.ClearGizmoTarget();
+            // Without the move handle, the selected building is tinted and boxed instead.
+            IReadOnlyList<NsbmdGlControl.HighlightBatch> highlight = VM.EditMode3D ? null : VM.SelectedBuildingHighlight();
+            GlView.SetHighlight(highlight);
+            GlView.SetOutline(MapEditorViewModel.OutlineOf(highlight));
+        }
+
+        private async void ChooseModel_Click(object sender, RoutedEventArgs e)
+        {
+            if (VM?.BuildingModelSource() is not (string dir, string texture)) return;
+            BuildingModelPickerViewModel picker = new BuildingModelPickerViewModel(dir, texture, (int)VM.BModelId);
+            if (TopLevel.GetTopLevel(this) is not Window owner) return;
+            if (await new BuildingModelPickerView(picker).ShowDialog<int?>(owner) is int chosen) VM.BModelId = chosen;
+        }
+
+        /// <summary>Finds the building whose anchor is nearest the screen point (within a pixel radius), or -1.</summary>
+        private int PickBuilding(Point p)
+        {
+            if (VM == null) return -1;
+            int best = -1; float bestD = 16f;
+            for (int i = 0; i < VM.BuildingCount; i++)
+            {
+                if (!VM.TryBuildingAnchorNorm(i, out float nx, out float ny, out float nz)) continue;
+                if (!GlView.WorldToScreen(nx, ny, nz, out float sx, out float sy)) continue;
+                float d = (float)Math.Sqrt((p.X - sx) * (p.X - sx) + (p.Y - sy) * (p.Y - sy));
+                if (d < bestD) { bestD = d; best = i; }
+            }
+            return best;
+        }
+
+        // Paints the tile under the cursor with the current collision/type value (3D paint mode).
+        private void PaintAt(Point pos)
+        {
+            if (VM == null) return;
+            if (VM.TryTileAtScreen((float)pos.X, (float)pos.Y,
+                    (x, y, z) => { bool k = GlView.WorldToScreen(x, y, z, out float sx, out float sy); return (k, sx, sy); },
+                    out int cellIndex, out int col, out int row))
+                VM.PaintTile(cellIndex, col, row);
+        }
+
+        private void OnVmPropertyChanged(object sender, PropertyChangedEventArgs e)
+        {
+            if (e.PropertyName is nameof(MapEditorViewModel.CollisionPaintValue) or nameof(MapEditorViewModel.TypePaintValue)
+                or nameof(MapEditorViewModel.PermissionShowsType)) ShowPermissions();
+            else if (e.PropertyName == nameof(MapEditorViewModel.ShowTextures)) GlView.ShowTextures = VM.ShowTextures;
+            else if (e.PropertyName == nameof(MapEditorViewModel.ShowTileGrid)) GlView.ShowTileGrid = VM.ShowTileGrid;
+        }
+
+        private void Gizmos_Toggled(object sender, RoutedEventArgs e)
+        {
+            if (sender is CheckBox cb) GlView.ShowGizmos = cb.IsChecked == true;
+        }
+
+        private async void AnimatedPreview_Click(object sender, RoutedEventArgs e)
+        {
+            if (VM?.Model3D == null)
+            {
+                await DialogHelper.ShowErrorAsync("Load a map first, so there is something to animate.", "Animated preview");
+                return;
+            }
+            AnimatedPreviewWindow win = new AnimatedPreviewWindow();
+            win.ShowFor(TopLevel.GetTopLevel(this) as Window, VM.Model3D, VM.Area, null, null, VM.Collision,
+                        cameraId: VM.CameraId, musicDayId: VM.MusicDayId, musicNightId: VM.MusicNightId);
+        }
+
+        private async void EditModel_Click(object sender, RoutedEventArgs e)
+        {
+            MapEditorViewModel vm = DataContext as MapEditorViewModel;
+            if (vm == null) return;
+
+            if (TopLevel.GetTopLevel(this) is not Window owner || !vm.PrepareModelEdit()) return;
+
+            try
+            {
+                vm.MapModel.Tiles.ImportedSinceOpen = false;
+                (byte[,] collisions, byte[,] types) permissionsBefore = vm.PermissionsNow();
+                MapModelEditorView window = new MapModelEditorView(vm.MapModel);
+                await window.ShowDialog(owner);
+
+                vm.AfterMapModelEdited();
+                if (vm.MapModel.Tiles.ImportedSinceOpen && vm.ReviewImport(permissionsBefore, fromModelWindow: true) is MapImportReviewViewModel review)
+                    await new MapImportReviewView(review).ShowDialog(owner);
+            }
+            finally { vm.EndModelEdit(); }
+        }
+
+        private async void Discard_Click(object sender, RoutedEventArgs e)
+        {
+            if (await DialogHelper.ConfirmDiscardAsync(this)) (DataContext as DSPRE.Editors.IEditorWithUnsavedChanges)?.DiscardChanges();
+        }
+
+        private async void Save_Click(object sender, RoutedEventArgs e)
+            => await DialogHelper.GuardAsync(() => { VM?.Save(); return System.Threading.Tasks.Task.CompletedTask; }, "The map wasn't saved.", ErrorTitle);
+        private async void Import_Click(object sender, RoutedEventArgs e)
+        {
+            MapEditorViewModel vm = VM;
+            if (vm == null) return;
+            (byte[,] collisions, byte[,] types) permissionsBefore = vm.PermissionsNow();
+            bool imported;
+            try { imported = await vm.ImportAsync(); }
+            catch (Exception ex) { AppLogger.Error("Map import: " + ex.Message); return; }
+            if (!imported || TopLevel.GetTopLevel(this) is not Window owner) return;
+            if (vm.ReviewImport(permissionsBefore, fromModelWindow: false) is MapImportReviewViewModel review)
+                await new MapImportReviewView(review).ShowDialog(owner);
+        }
+        private async void Export_Click(object sender, RoutedEventArgs e) => await DialogHelper.GuardAsync(() => VM?.ExportAsync() ?? Task.CompletedTask, "The map wasn't exported.", ErrorTitle);
+        private void AddMap_Click(object sender, RoutedEventArgs e) => VM?.AddMapFile();
+        private async void RemMap_Click(object sender, RoutedEventArgs e) => await DialogHelper.GuardAsync(() => VM?.RemoveLastMapFileAsync() ?? Task.CompletedTask, "The map file wasn't removed.", ErrorTitle);
+        private void AddBuilding_Click(object sender, RoutedEventArgs e) => VM?.AddBuilding();
+        private void RemoveBuilding_Click(object sender, RoutedEventArgs e) => VM?.RemoveBuilding();
+        private void DupBuilding_Click(object sender, RoutedEventArgs e) => VM?.DuplicateBuilding();
+        private async void ImportBuildings_Click(object sender, RoutedEventArgs e) => await DialogHelper.GuardAsync(() => VM?.ImportBuildingsAsync() ?? Task.CompletedTask, "The buildings weren't imported.", ErrorTitle);
+        private async void ExportBuildings_Click(object sender, RoutedEventArgs e) => await DialogHelper.GuardAsync(() => VM?.ExportBuildingsAsync() ?? Task.CompletedTask, "The buildings weren't exported.", ErrorTitle);
+
+        private async void ExportNsbmd_Click(object sender, RoutedEventArgs e) => await DialogHelper.GuardAsync(() => VM?.ExportNsbmdAsync() ?? Task.CompletedTask, "The map model wasn't exported.", ErrorTitle);
+        private async void ExportTexturedNsbmd_Click(object sender, RoutedEventArgs e) => await DialogHelper.GuardAsync(() => VM?.ExportTexturedNsbmdAsync() ?? Task.CompletedTask, "The textured map model wasn't exported.", ErrorTitle);
+        private void ShowMapFile_Click(object sender, RoutedEventArgs e) => VM?.ShowMapFile();
+        private void ClearLayer_Click(object sender, RoutedEventArgs e)
+        {
+            if (VM == null) return;
+            VM.ClearPermissionLayer();
+            ShowPermissions();
+            PermGrid.InvalidateVisual(); CollisionThumb.InvalidateVisual(); TypeThumb.InvalidateVisual();
+        }
+        private async void Screenshot_Click(object sender, RoutedEventArgs e) =>
+            await GlScreenshot.SaveAsync(GlView, TopLevel.GetTopLevel(this) as Window, "dspre_map",
+                SaveNotice.Exported);
+        private void ExportDae_Click(object sender, RoutedEventArgs e) => VM?.ExportDae();
+        private void ExportGlb_Click(object sender, RoutedEventArgs e) => VM?.ExportGlb();
+        private async void ImportTerrain_Click(object sender, RoutedEventArgs e) => await DialogHelper.GuardAsync(() => VM?.ImportTerrainAsync() ?? Task.CompletedTask, "The terrain wasn't imported.", ErrorTitle);
+        private async void ExportTerrain_Click(object sender, RoutedEventArgs e) => await DialogHelper.GuardAsync(() => VM?.ExportTerrainAsync() ?? Task.CompletedTask, "The terrain wasn't exported.", ErrorTitle);
+        private async void ImportSound_Click(object sender, RoutedEventArgs e) => await DialogHelper.GuardAsync(() => VM?.ImportSoundAsync() ?? Task.CompletedTask, "The sound data wasn't imported.", ErrorTitle);
+        private async void ExportSound_Click(object sender, RoutedEventArgs e) => await DialogHelper.GuardAsync(() => VM?.ExportSoundAsync() ?? Task.CompletedTask, "The sound data wasn't exported.", ErrorTitle);
+        private void BlankSound_Click(object sender, RoutedEventArgs e) => VM?.BlankSound();
+        private async void ImportPerms_Click(object sender, RoutedEventArgs e) => await DialogHelper.GuardAsync(() => VM?.ImportPermissionsAsync() ?? Task.CompletedTask, "The permissions weren't imported.", ErrorTitle);
+        private async void ExportPerms_Click(object sender, RoutedEventArgs e) => await DialogHelper.GuardAsync(() => VM?.ExportPermissionsAsync() ?? Task.CompletedTask, "The permissions weren't exported.", ErrorTitle);
+
+        private async void ScanTypes_Click(object sender, RoutedEventArgs e)
+        {
+            if (VM == null) return;
+            string report = VM.ScanUsedTypes();
+            IClipboard clip = TopLevel.GetTopLevel(this)?.Clipboard;
+            clip?.SetTextAsync(report);
+            await DialogHelper.ShowInfoAsync($"Used types across all maps (copied to clipboard):\n\n{report}", "Used collision types");
+        }
+
+        private const string ErrorTitle = "Map editor";
+    }
+}

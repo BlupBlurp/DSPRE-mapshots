@@ -10,19 +10,91 @@ permissions:
   actions: write
 
 env:
-  SOLUTION_FILE_PATH: DS_Map.sln
   BUILD_CONFIGURATION: Release
 
 jobs:
+  build-linux:
+    if: github.repository == 'DS-Pokemon-Rom-Editor/DSPRE'
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v2
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        # Avalonia 12 needs a newer compiler than SDK 8 has; the 8 runtime runs the net8.0 app and tests.
+        dotnet-version: |
+          8.0.x
+          10.0.x
+
+    - name: Setup Rust
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Clone Database Repository
+      run: git clone https://github.com/DS-Pokemon-Rom-Editor/scrcmd-database.git databases
+
+    - name: Clone ds-rom Repository
+      run: git clone --depth 1 https://github.com/DS-Pokemon-Rom-Editor/ds-rom.git ds-rom
+
+    - name: Publish DSPRE.Avalonia (linux-x64)
+      run: dotnet publish DSPRE.Avalonia/DSPRE.Avalonia.csproj -c Release -r linux-x64 --self-contained true -o publish-linux
+
+    - name: Build dsrom (Linux)
+      run: |
+        cargo build --release -p ds-rom-cli --manifest-path ds-rom/Cargo.toml
+        mkdir -p publish-linux/Tools
+        cp ds-rom/target/release/dsrom publish-linux/Tools/dsrom
+        chmod +x publish-linux/Tools/dsrom
+
+    - name: Build apicula (Linux)
+      uses: ./.github/actions/build-apicula
+      with:
+        output-directory: publish-linux/Tools
+
+    - name: Build rotom (Linux)
+      uses: ./.github/actions/build-rotom
+      with:
+        output-directory: publish-linux/Tools
+
+    - name: Build chatot
+      uses: ./.github/actions/build-chatot
+      with:
+        output-directory: publish-linux/Tools
+
+    # TODO: drop the remaining Linux tool binaries into publish-linux/Tools/ with these exact
+    # names (no extension): ndstool, blz.
+    # ndstool + blz build from source (devkitPro / CUE tools).
+
+    - name: Bundle Databases
+      run: |
+        mkdir -p publish-linux/databases
+        rsync -a --exclude='.git' --exclude='.github' --exclude='.gitmodules' databases/ publish-linux/databases/
+
+    - name: Archive Linux build
+      run: tar -C publish-linux -czf DSPRE-linux-x64-canary.tar.gz .
+
+    - name: Upload Linux artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: dspre-linux-x64
+        path: DSPRE-linux-x64-canary.tar.gz
+
   build:
     if: github.repository == 'DS-Pokemon-Rom-Editor/DSPRE'
+    needs: build-linux
     runs-on: windows-latest
 
     steps:
     - uses: actions/checkout@v2
 
-    - name: Add MSBuild to PATH
-      uses: microsoft/setup-msbuild@v2
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        # Avalonia 12 needs a newer compiler than SDK 8 has; the 8 runtime runs the net8.0 app and tests.
+        dotnet-version: |
+          8.0.x
+          10.0.x
 
     - name: Setup Rust
       uses: dtolnay/rust-toolchain@stable
@@ -35,28 +107,46 @@ jobs:
       run: |
         git clone --depth 1 https://github.com/DS-Pokemon-Rom-Editor/ds-rom.git ds-rom
         
-    - name: Restore NuGet packages
-      working-directory: ${{ github.workspace }}
-      run: nuget restore ${{env.SOLUTION_FILE_PATH}}
-
-    - name: Build DSPRE
-      working-directory: ${{ github.workspace }}
-      run: msbuild /m /p:Configuration=${{env.BUILD_CONFIGURATION}} ${{env.SOLUTION_FILE_PATH}}
+    - name: Publish DSPRE (win-x64)
+      run: |
+        dotnet publish DSPRE.Avalonia/DSPRE.Avalonia.csproj -p:PublishProfile=win-x64 -o publish-win
+        # Installed copies update through DSPRE.exe; the launcher still finds DSPRE.Avalonia.dll by name.
+        Rename-Item -Path publish-win/DSPRE.Avalonia.exe -NewName DSPRE.exe
     
     - name: Build dsrom.exe
       run: |
         cargo build --release -p ds-rom-cli --manifest-path ds-rom/Cargo.toml
-        New-Item -ItemType Directory -Force -Path "${{ github.workspace }}\DS_Map\bin\Release\Tools" | Out-Null
-        Copy-Item -Path "${{ github.workspace }}\ds-rom\target\release\dsrom.exe" -Destination "${{ github.workspace }}\DS_Map\bin\Release\Tools\dsrom.exe" -Force
+        New-Item -ItemType Directory -Force -Path "${{ github.workspace }}\publish-win\Tools" | Out-Null
+        Copy-Item -Path "${{ github.workspace }}\ds-rom\target\release\dsrom.exe" -Destination "${{ github.workspace }}\publish-win\Tools\dsrom.exe" -Force
+
+    - name: Build apicula.exe
+      uses: ./.github/actions/build-apicula
+      with:
+        output-directory: publish-win/Tools
+
+    - name: Build rotom.exe
+      uses: ./.github/actions/build-rotom
+      with:
+        output-directory: publish-win/Tools
+
+    - name: Build chatot
+      uses: ./.github/actions/build-chatot
+      with:
+        output-directory: publish-win/Tools
     
     - name: Prepare Release Files
       run: |
-        mkdir "${{ github.workspace }}\DS_Map\bin\Release\databases"
-        robocopy databases "${{ github.workspace }}\DS_Map\bin\Release\databases" /E /XD "databases\.git\objects\pack"
+        mkdir "${{ github.workspace }}\publish-win\databases"
+        robocopy databases "${{ github.workspace }}\publish-win\databases" /E /XD .git .github /XF .gitmodules
         if ($LASTEXITCODE -le 7) { exit 0 } else { exit 1 }
 
     - name: Zip Release Files
-      run: Compress-Archive -Path "${{ github.workspace }}\DS_Map\bin\Release\*" -DestinationPath DSPRE-canary-${{ github.sha }}.zip
+      run: Compress-Archive -Path "${{ github.workspace }}\publish-win\*" -DestinationPath DSPRE-canary-${{ github.sha }}.zip
+
+    - name: Download Linux artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: dspre-linux-x64
 
     - name: Fetch tags
       run: git fetch --prune --unshallow --tags
@@ -83,7 +173,9 @@ jobs:
       with:
         tag_name: canary
         name: DSPRE Canary Build ${{ steps.date.outputs.date }} (${{ github.sha }})
-        files: DSPRE-canary-${{ github.sha }}.zip
+        files: |
+          DSPRE-canary-${{ github.sha }}.zip
+          DSPRE-linux-x64-canary.tar.gz
         token: ${{ secrets.GITHUB_TOKEN }}
         body: |
           ##  ⚠️ Canary Build Notice ⚠️
@@ -92,7 +184,7 @@ jobs:
           ## 🚧 What does this mean?
           This build reflects ongoing development and is not a stable release.
           Features may be incomplete, subject to change, or cause unexpected issues.
-          Use at your own risk—expect potential crashes, broken functionality, or unpolished features.
+          Use at your own risk: expect potential crashes, broken functionality, or unpolished features.
           
           ## 💡 Who is this for?
           Developers and testers who want to stay up-to-date with the latest progress.

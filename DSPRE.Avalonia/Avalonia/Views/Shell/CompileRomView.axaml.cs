@@ -1,0 +1,52 @@
+using System.Collections.Specialized;
+using System.Threading.Tasks;
+using Avalonia.Controls;
+using Avalonia.Interactivity;
+using Avalonia.Markup.Xaml;
+using DSPRE.Avalonia.ViewModels;
+
+namespace DSPRE.Avalonia.Views.Shell
+{
+    public partial class CompileRomView : Window
+    {
+        private CompileRomViewModel VM => (CompileRomViewModel)DataContext;
+
+        public CompileRomView()
+        {
+            AvaloniaXamlLoader.Load(this);
+            DataContext = new CompileRomViewModel();
+            VM.LogLines.CollectionChanged += LogLines_CollectionChanged;
+            Closing += (_, e) => { if (!VM.CanClose) e.Cancel = true; };
+        }
+
+        private void LogLines_CollectionChanged(object sender, NotifyCollectionChangedEventArgs e)
+        {
+            ListBox listBox = this.FindControl<ListBox>("LogList");
+            if (listBox != null && VM.LogLines.Count > 0)
+                listBox.ScrollIntoView(VM.LogLines[VM.LogLines.Count - 1]);
+        }
+
+        private void Close_Click(object sender, RoutedEventArgs e) => Close();
+
+        /// <summary>Shows the window modally and runs the build; the window can't close until the build
+        /// finishes, so the build and any exception are observed when this returns.</summary>
+        public async System.Threading.Tasks.Task ShowAndRunAsync(Window owner)
+        {
+            Task runTask = VM.RunAsync();
+            await ShowDialog(owner);
+            await runTask;
+        }
+
+        /// <summary>Builds with the log showing and closes on success. True when the ROM was built.</summary>
+        public async System.Threading.Tasks.Task<bool> BuildAsync(Window owner, string buildRom = null)
+        {
+            VM.BuildRom = buildRom;
+            Task runTask = VM.RunAsync();
+            Task shown = ShowDialog(owner);
+            await runTask;
+            if (VM.Succeeded) Close();
+            await shown;
+            return VM.Succeeded;
+        }
+    }
+}

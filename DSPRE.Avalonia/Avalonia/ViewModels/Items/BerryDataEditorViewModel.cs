@@ -1,0 +1,170 @@
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.IO;
+using System.Linq;
+using System.Runtime.CompilerServices;
+using System.Threading.Tasks;
+using DSPRE.Editors;
+using DSPRE.ROMFiles;
+using static DSPRE.RomInfo;
+
+namespace DSPRE.Avalonia.ViewModels.Items
+{
+    /// <summary>Each berry's size, firmness, growth and flavours.</summary>
+    public class BerryDataEditorViewModel : INotifyPropertyChanged, IEditorWithUnsavedChanges, ISupportsUndo
+    {
+        public event PropertyChangedEventHandler PropertyChanged;
+        private void Raise([CallerMemberName] string n = null) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(n));
+
+        private List<BerryData> _berries = new List<BerryData>();
+        private List<byte[]> _saved = new List<byte[]>();
+
+        private ByteStateUndo _undo;
+        private void StartUndo() => _undo = new ByteStateUndo(() => _berries.SelectMany(b => b.ToBytes()).ToArray(), b => { for (int i = 0; i < _berries.Count; i++) _berries[i] = new BerryData(b.AsSpan(i * BerryData.Size, BerryData.Size).ToArray()); RaiseFields(); }, () => { Raise(nameof(CanUndo)); Raise(nameof(CanRedo)); });
+        public bool CanUndo => _undo?.CanUndo == true;
+        public bool CanRedo => _undo?.CanRedo == true;
+        public void Undo() => _undo?.Undo();
+        public void Redo() => _undo?.Redo();
+
+        public List<string> BerryNames { get; } = new List<string>();
+        public List<BerryRow> BerryRows { get; } = new List<BerryRow>();
+
+        /// <summary>A berry in the list, marked while it has unsaved edits.</summary>
+        public sealed class BerryRow : INotifyPropertyChanged
+        {
+            public event PropertyChangedEventHandler PropertyChanged;
+            private string _name;
+            public string Name
+            {
+                get => _name;
+                set { if (_name == value) return; _name = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Name))); }
+            }
+            public int Item { get; init; }
+            private bool _changed;
+            public bool Changed
+            {
+                get => _changed;
+                set { if (_changed == value) return; _changed = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Changed))); }
+            }
+        }
+        public string[] FirmnessNames => BerryData.Firmness;
+        public bool LooksUnread => !BerryData.GameReadsLooks;
+
+        public BerryDataEditorViewModel() { }
+
+        public BerryDataEditorViewModel(bool load)
+        {
+            if (!load) return;
+            _berries = BerryData.LoadAll();
+            _saved = _berries.Select(b => b.ToBytes()).ToList();
+            StartUndo();
+            string[] items = GetItemNames();
+            for (int b = 0; b < BerryData.Count; b++)
+            {
+                int item = BerryData.FirstBerryItem + b;
+                BerryNames.Add(item < items.Length ? items[item] : $"Berry {b + 1}");
+                BerryRows.Add(new BerryRow { Name = BerryNames[b], Item = item });
+            }
+            _selected = 0;
+        }
+
+        public void RefreshNames()
+        {
+            string[] items = GetItemNames();
+            for (int b = 0; b < BerryRows.Count; b++)
+            {
+                int item = BerryRows[b].Item;
+                BerryNames[b] = item < items.Length ? items[item] : $"Berry {b + 1}";
+                BerryRows[b].Name = BerryNames[b];
+            }
+            Raise(nameof(SelectedName));
+        }
+
+        private int _selected = -1;
+        public int SelectedBerry
+        {
+            get => _selected;
+            set { if (value < 0 || value >= _berries.Count || value == _selected) return; _selected = value; RaiseFields(); }
+        }
+
+        private BerryData Current => _selected >= 0 && _selected < _berries.Count ? _berries[_selected] : null;
+
+        private decimal Get(Func<BerryData, int> read) => Current == null ? 0 : read(Current);
+        private void Set(Action<BerryData> write) { if (Current == null) return; write(Current); RaiseFields(); _undo?.Record(); }
+
+        public decimal SizeMm { get => Get(b => b.SizeMm); set => Set(b => b.SizeMm = (ushort)Math.Clamp(value, 0, ushort.MaxValue)); }
+        public int FirmnessIndex { get => Current == null ? -1 : Current.FirmnessLevel - 1; set { if (value >= 0 && value < 5) Set(b => b.FirmnessLevel = (byte)(value + 1)); } }
+        public decimal Yield { get => Get(b => b.Yield); set => Set(b => b.Yield = Byte(value)); }
+        public decimal HoursPerStage { get => Get(b => b.HoursPerStage); set => Set(b => b.HoursPerStage = Byte(value)); }
+        public decimal Drain { get => Get(b => b.Drain); set => Set(b => b.Drain = Byte(value)); }
+        public decimal Spicy { get => Get(b => b.Flavour[0]); set => Set(b => b.Flavour[0] = Byte(value)); }
+        public decimal Dry { get => Get(b => b.Flavour[1]); set => Set(b => b.Flavour[1] = Byte(value)); }
+        public decimal Sweet { get => Get(b => b.Flavour[2]); set => Set(b => b.Flavour[2] = Byte(value)); }
+        public decimal Bitter { get => Get(b => b.Flavour[3]); set => Set(b => b.Flavour[3] = Byte(value)); }
+        public decimal Sour { get => Get(b => b.Flavour[4]); set => Set(b => b.Flavour[4] = Byte(value)); }
+        public decimal Smoothness { get => Get(b => b.Smoothness); set => Set(b => b.Smoothness = Byte(value)); }
+
+        private static byte Byte(decimal v) => (byte)Math.Clamp(v, 0, 255);
+
+        public string Problem => Current?.Problem() ?? "";
+        public bool HasProblem => Problem.Length > 0;
+
+        public int SelectedItem => _selected >= 0 && _selected < BerryRows.Count ? BerryRows[_selected].Item : 0;
+        public string SelectedName => _selected >= 0 && _selected < BerryRows.Count ? BerryRows[_selected].Name : "";
+
+        // The Poffin and Pokéblock colours for each flavour.
+        public System.Collections.Generic.IReadOnlyList<DSPRE.Avalonia.Controls.BarPart> FlavourParts => Current == null ? null : new[]
+        {
+            new DSPRE.Avalonia.Controls.BarPart { Value = Current.Flavour[0], Label = "Spicy", Colour = global::Avalonia.Media.Color.FromRgb(0xD9, 0x4B, 0x3F) },
+            new DSPRE.Avalonia.Controls.BarPart { Value = Current.Flavour[1], Label = "Dry", Colour = global::Avalonia.Media.Color.FromRgb(0x3F, 0x7F, 0xD9) },
+            new DSPRE.Avalonia.Controls.BarPart { Value = Current.Flavour[2], Label = "Sweet", Colour = global::Avalonia.Media.Color.FromRgb(0xE0, 0x6F, 0xB0) },
+            new DSPRE.Avalonia.Controls.BarPart { Value = Current.Flavour[3], Label = "Bitter", Colour = global::Avalonia.Media.Color.FromRgb(0x4F, 0xA8, 0x4F) },
+            new DSPRE.Avalonia.Controls.BarPart { Value = Current.Flavour[4], Label = "Sour", Colour = global::Avalonia.Media.Color.FromRgb(0xC9, 0xAE, 0x2E) },
+        };
+
+        private void RaiseFields()
+        {
+            foreach (string n in new[] { nameof(SelectedBerry), nameof(SizeMm), nameof(FirmnessIndex), nameof(Yield), nameof(HoursPerStage),
+                                      nameof(Drain), nameof(Spicy), nameof(Dry), nameof(Sweet), nameof(Bitter), nameof(Sour),
+                                      nameof(Smoothness), nameof(Problem), nameof(HasProblem), nameof(HasUnsavedChanges),
+                                      nameof(SelectedItem), nameof(SelectedName), nameof(FlavourParts) })
+                Raise(n);
+            for (int b = 0; b < BerryRows.Count && b < _berries.Count; b++) BerryRows[b].Changed = BerryChanged(b);
+        }
+
+        private bool BerryChanged(int b) => !_berries[b].ToBytes().AsSpan().SequenceEqual(_saved[b]);
+
+        public bool HasUnsavedChanges => Enumerable.Range(0, _berries.Count).Any(BerryChanged);
+        public string UnsavedChangesDescription => "Berry data";
+
+        public void SaveChanges() => DialogHelper.Watch(SaveChangesAsync());
+
+        public async Task<bool> SaveChangesAsync()
+        {
+            List<int> changed = Enumerable.Range(0, _berries.Count).Where(BerryChanged).ToList();
+            foreach (int b in changed)
+                if (_berries[b].Problem() is string p) { await DialogHelper.ShowErrorAsync($"{BerryNames[b]}: {p}", "Berry data"); return false; }
+            try
+            {
+                foreach (int b in changed) { _berries[b].Save(b); _saved[b] = _berries[b].ToBytes(); }
+            }
+            catch (Exception e) when (e is IOException || e is UnauthorizedAccessException || e is InvalidOperationException)
+            {
+                RaiseFields();   // berries saved before the failure lose their mark
+                await DialogHelper.ShowErrorAsync("The berry data wasn't saved:\n" + e.Message, "Berry data");
+                return false;
+            }
+            RaiseFields();
+            SaveNotice.Saved(UnsavedChangesDescription);
+            return true;
+        }
+
+        public void DiscardChanges()
+        {
+            for (int b = 0; b < _berries.Count; b++) _berries[b] = new BerryData(_saved[b]);
+            StartUndo();
+            RaiseFields();
+        }
+    }
+}

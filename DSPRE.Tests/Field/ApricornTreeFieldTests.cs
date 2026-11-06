@@ -1,0 +1,111 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Reflection;
+using DSPRE;
+using DSPRE.Avalonia.ViewModels.World;
+using DSPRE.ROMFiles;
+using Xunit;
+using Xunit.Abstractions;
+
+namespace DSPRE.Tests
+{
+    /// <summary>
+    /// The field DSPRE calls Sight range is the engine's param0, and param0 means different things to
+    /// different overworlds.
+    /// </summary>
+    [Collection("rom")]
+    public class ApricornTreeFieldTests
+    {
+        private readonly ITestOutputHelper _out;
+        public ApricornTreeFieldTests(ITestOutputHelper o) { _out = o; }
+
+        private static readonly string HeartGold = TestRoms.HeartGold;
+
+        /// <summary>
+        /// DSPRE reads the overworld record in the engine's field order, so the field named sightRange is the
+        /// first parameter and sits at offset 0x0E.
+        /// </summary>
+        [Fact]
+        public void SightRangeIsParamZeroAtTheOffsetTheEngineUses()
+        {
+            // id, sprite, movement, type, flag, script, facing, then the three parameters,
+            // all unsigned short, so param0 is the eighth field and starts at 7 * 2 = 14.
+            byte[] bytes = new byte[32];
+            void U16(int at, int v) { bytes[at] = (byte)v; bytes[at + 1] = (byte)(v >> 8); }
+            U16(0, 0x1111);    // id
+            U16(2, 0x0107);    // sprite, an apricorn tree
+            U16(4, 0x3333);    // movement
+            U16(6, 0x4444);    // type
+            U16(8, 0x5555);    // flag
+            U16(10, 0x6666);   // script
+            U16(12, 0x7777);   // dir
+            U16(14, 0x00AB);   // param0
+            U16(16, 0x9999);   // param1
+            U16(18, 0xAAAA);   // param2
+
+            Overworld ow = new Overworld(new MemoryStream(bytes));
+            Assert.Equal(0x0107, ow.OverlayTableEntry);
+            Assert.Equal(0x00AB, ow.SightRange);
+            Assert.Equal(0x9999, ow.Param1);
+            Assert.Equal(0xAAAA, ow.Param2);
+            _out.WriteLine("param0 read from offset 0x0E as sightRange");
+        }
+
+        /// <summary>
+        /// Apricorn trees really do exist in HeartGold's maps and carry a bed number in that field.
+        /// </summary>
+        [SkippableFact]
+        public void HeartGoldsApricornTreesCarryABedNumberInThatField()
+        {
+            Skip.If(!Directory.Exists(HeartGold), "HeartGold not unpacked here");
+            new RomInfo("IPKE", HeartGold);
+
+            int trees = 0, read = 0;
+            SortedSet<int> beds = new System.Collections.Generic.SortedSet<int>();
+            int files = RomInfo.GetEventFileCount();
+            for (int i = 0; i < files; i++)
+            {
+                EventFile ev;
+                try { ev = new EventFile(i); } catch { continue; }
+                read++;
+                foreach (Overworld ow in ev.Overworlds)
+                {
+                    if (ow.OverlayTableEntry < 0x0106 || ow.OverlayTableEntry > 0x0114) continue;
+                    trees++;
+                    beds.Add(ow.SightRange);
+                }
+            }
+
+            _out.WriteLine($"{read} event files read, {trees} apricorn trees, "
+                         + $"beds used: {string.Join(",", beds)}");
+            Assert.True(read > 100, $"only {read} event files were read, the sweep proved little");
+            Assert.True(trees > 0, "no apricorn trees found at all, so this proved nothing");
+
+            // Each tree names its own bed, so the numbers must not all be the same.
+            Assert.True(beds.Count > 1,
+                $"every tree names bed {beds.FirstOrDefault()}, which cannot be how the beds work");
+        }
+
+        /// <summary>
+        /// The editor offers the apricorn wording for a tree and the sight-range wording for anything else,
+        /// so the number is never presented as something it is not.
+        /// </summary>
+        [SkippableFact]
+        public void TheEditorCallsItABedOnlyForATree()
+        {
+            Skip.If(!Directory.Exists(HeartGold), "HeartGold not unpacked here");
+            new RomInfo("IPKE", HeartGold);
+
+            EventEditorViewModel vm = new DSPRE.Avalonia.ViewModels.World.EventEditorViewModel();
+            Type t = vm.GetType();
+            PropertyInfo isTree = t.GetProperty("OwIsApricornTree");
+            Assert.NotNull(isTree);
+
+            // With nothing selected it must not claim to be a tree.
+            Assert.False((bool)isTree.GetValue(vm));
+            _out.WriteLine("with no event selected, the apricorn panel stays hidden");
+        }
+    }
+}

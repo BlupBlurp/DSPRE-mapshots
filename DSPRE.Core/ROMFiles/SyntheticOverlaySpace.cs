@@ -1,0 +1,164 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Text;
+
+namespace DSPRE.ROMFiles
+{
+    /// <summary>
+    /// Free space in the synthetic overlay for tables DSPRE moves there. Each block starts with a 12-byte ASCII marker
+    /// and keeps its length at +0x10, so every allocator can see the others' blocks.
+    /// </summary>
+    public static class SyntheticOverlaySpace
+    {
+        public const int HeaderSize = 0x20;
+
+        /// <summary>Markers of every block DSPRE places here. Add a new block's marker before allocating it.</summary>
+        public static readonly string[] BlockMarkers = { "MARTEXPANDV1", "BPSHOPEXPV1\0", "TYPECHARTXP1", "SWARMTABLEX1", VsIntroTables.ClassTableMarker, VsIntroTimingAddon.Marker,
+                                                         MoveCategoryTable.MarkerOf(MoveCategoryTable.Kind.Punching), MoveCategoryTable.MarkerOf(MoveCategoryTable.Kind.Sound),
+                                                         TrainerClassTableExpansion.GenderMarker, TrainerClassTableExpansion.PrizeMarker, TrainerClassTableExpansion.MusicMarker,
+                                                         PickupSlotsPatch.Marker, ClassIntroPatch.Marker, BattleGaugeTextPatch.Marker, SummaryFontPatch.Marker, PartyFontPatch.Marker, HpBarFontPatch.Marker, ExtraFontsPatch.Marker, BannerMotionPatch.Marker,
+                                                         BuildingRotationMarker, TrainerShinyMarker, ClassMetadataMarker, CommandTableMarker };
+
+        /// <summary>Markers for the patches that used to ask for an offset; their blocks hold the old payload after the header.</summary>
+        public const string BuildingRotationMarker = "BLDGROTATEV1", TrainerShinyMarker = "TRAINSHINYV1",
+                            ClassMetadataMarker = "TRCLASSMETA1", CommandTableMarker = "SCRCMDTABLV1";
+
+        /// <summary>The header that starts a block: its marker, version 1 and the block's whole length.</summary>
+        public static byte[] Header(string marker, int blockLength)
+        {
+            byte[] header = new byte[HeaderSize];
+            Encoding.ASCII.GetBytes(marker).CopyTo(header, 0);
+            BitConverter.GetBytes(1u).CopyTo(header, 0x0C);
+            BitConverter.GetBytes((uint)blockLength).CopyTo(header, 0x10);
+            return header;
+        }
+
+        /// <summary>Whether the ARM9 expansion is applied and its overlay is large enough to hold tables.</summary>
+        public static bool Available()
+        {
+            DSUtils.TryUnpackNarcs(new List<RomInfo.DirNames> { RomInfo.DirNames.SynthOverlay });
+            return (RomPatchState.FlagArm9Expanded || PatchToolboxLogic.CheckFilesArm9ExpansionApplied())
+                && File.Exists(Filesystem.ExpArmPath)
+                && new FileInfo(Filesystem.ExpArmPath).Length >= RomInfo.SynthOverlaySize;
+        }
+
+        /// <summary>Byte ranges already owned by a marked block.</summary>
+        public static List<(long Start, long End)> Blocks(byte[] data, string onlyMarker = null)
+        {
+            List<(long, long)> ranges = new List<(long, long)>();
+            foreach (string marker in onlyMarker != null ? new[] { onlyMarker } : BlockMarkers)
+            {
+                foreach (int hit in DSUtils.SearchBytes(data, Encoding.ASCII.GetBytes(marker)))
+                {
+                    if (hit + HeaderSize > data.Length) continue;
+                    uint length = BitConverter.ToUInt32(data, hit + 0x10);
+                    if (length >= HeaderSize && (long)hit + length <= data.Length)
+                        ranges.Add((hit, hit + length));
+                }
+            }
+            return ranges;
+        }
+
+        /// <summary>Everything an allocator must not touch: marked blocks and the overworld expansion.</summary>
+        public static List<(long Start, long End)> Reserved(byte[] data)
+        {
+            List<(long Start, long End)> ranges = Blocks(data);
+            OverworldSpriteTableExpansion.Detect();
+            (long Start, long End)? ow = OverworldSpriteTableExpansion.GetReservedByteRange();
+            if (ow.HasValue) ranges.Add(ow.Value);
+            // A chart moved here by another patch has no marker.
+            (long Start, long End)? chart = TypeChart.UnmarkedRangeInExpansion();
+            if (chart.HasValue) ranges.Add(chart.Value);
+            ranges.AddRange(PlatPatchesBlocks(data));
+            ranges.AddRange(PatchToolboxLogic.HandPlacedRanges());
+            ranges.AddRange(TrainerClassTableExpansion.MovedTableRanges());
+            // The class metadata patch's payload has zero-filled scratch words an all-zero search would take for free space.
+            if (RomInfo.GameFamily == RomInfo.GameFamilies.HGSS && TrainerClassMetadataPatch.InstalledOffset() is uint tcm)
+                ranges.Add((tcm, tcm + TrainerClassMetadataPatch.PayloadSize));
+            // PlatPatches installs item payloads at fixed offsets and refuses when they are occupied.
+            if (RomInfo.GameFamily == RomInfo.GameFamilies.Plat && data.Length > PlatPatchesFixedStart)
+                ranges.Add((PlatPatchesFixedStart, Math.Min(PlatPatchesFixedEnd, data.Length)));
+            return ranges;
+        }
+
+        public static int PlatPatchesFixedStart => RomInfo.PlatPatchesFixedStart;
+        public static int PlatPatchesFixedEnd => RomInfo.SynthOverlaySize;
+
+        // PlatPatches' blocks store no length and their unused rows read as zero, so each is reserved by its full layout.
+        private static readonly (string Marker, int Length)[] PlatPatchesLayouts =
+        {
+            ("EXTRATMSV1", 0x608 + 4 * 1024),
+            ("ITEMEXPV2", -1),
+            ("ITEMEXPV1", 0x1000),
+        };
+
+        public static IEnumerable<(long Start, long End)> PlatPatchesBlocks(byte[] data)
+        {
+            foreach ((string marker, int fixedLength) in PlatPatchesLayouts)
+                foreach (int hit in DSUtils.SearchBytes(data, Encoding.ASCII.GetBytes(marker)))
+                {
+                    long length = fixedLength;
+                    if (length < 0)
+                        length = 0x298 + 8L * Math.Max((ushort)128, hit + 0x296 <= data.Length ? BitConverter.ToUInt16(data, hit + 0x294) : (ushort)128);
+                    yield return (hit, Math.Min(hit + length, data.Length));
+                }
+        }
+
+        // Offsets the toolbox showed before a patch ran; while set, each placement takes the next one.
+        private static Queue<int> _planned;
+
+        /// <summary>Where blocks of these lengths would go, in order, as <see cref="Place"/> would choose; null when one doesn't fit.</summary>
+        public static int[] Plan(params int[] lengths)
+        {
+            byte[] data = File.ReadAllBytes(Filesystem.ExpArmPath);
+            List<(long Start, long End)> reserved = Reserved(data);
+            int[] offsets = new int[lengths.Length];
+            for (int i = 0; i < lengths.Length; i++)
+            {
+                offsets[i] = FindFree(data, lengths[i], 4, reserved);
+                if (offsets[i] < 0) return null;
+                reserved.Add((offsets[i], offsets[i] + lengths[i]));
+            }
+            return offsets;
+        }
+
+        /// <summary>Runs <paramref name="move"/> with its blocks placed at <paramref name="offsets"/>, in order.</summary>
+        public static void PlaceAt(int[] offsets, Action move)
+        {
+            _planned = new Queue<int>(offsets);
+            try { move(); }
+            finally { _planned = null; }
+        }
+
+        /// <summary>
+        /// Where a block of <paramref name="length"/> bytes goes: the planned offset while <see cref="PlaceAt"/> runs, which
+        /// must still be free, otherwise the first free run.
+        /// </summary>
+        public static int Place(byte[] data, int length, IReadOnlyList<(long Start, long End)> reserved)
+        {
+            if (_planned == null) return FindFree(data, length, 4, reserved);
+            if (_planned.Count == 0) throw new InvalidOperationException("The patch needed more room than it showed, so it stopped.");
+            int at = _planned.Dequeue();
+            bool free = at >= 0 && at + length <= data.Length && !reserved.Any(r => at + length > r.Start && at < r.End)
+                        && data.AsSpan(at, length).IndexOfAnyExcept((byte)0) < 0;
+            if (!free) throw new InvalidOperationException($"0x{at:X} in the synthetic overlay is no longer free.");
+            return at;
+        }
+
+        /// <summary>The first all-zero, aligned run of <paramref name="length"/> bytes outside the reserved ranges, or -1.</summary>
+        public static int FindFree(byte[] data, int length, int alignment, IReadOnlyList<(long Start, long End)> reserved)
+        {
+            for (int offset = 0; offset + length <= data.Length; offset += alignment)
+            {
+                if (reserved.Any(r => offset + length > r.Start && offset < r.End)) continue;
+                bool clear = true;
+                for (int i = 0; i < length; i++)
+                    if (data[offset + i] != 0) { clear = false; break; }
+                if (clear) return offset;
+            }
+            return -1;
+        }
+    }
+}

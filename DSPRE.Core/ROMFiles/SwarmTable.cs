@@ -1,0 +1,264 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Text;
+using static DSPRE.RomInfo;
+
+namespace DSPRE.ROMFiles
+{
+    /// <summary>
+    /// Where a swarm can happen; HGSS rows add an encounter method. The row count lives only in the two
+    /// `movs r1, #count` sites that pick the day's swarm. Growing past the game's room takes the "Expand the swarm
+    /// table" toolbox patch, which moves the table to the ARM9 expansion with room for <see cref="MaxRows"/>.
+    /// </summary>
+    public sealed class SwarmTable
+    {
+        public sealed class Row
+        {
+            public ushort Header { get; set; }
+            public ushort Method { get; set; }
+        }
+
+        public const string Marker = "SWARMTABLEX1";
+        public static readonly string[] MethodNames = { "Walking", "Surfing", "Fishing" };
+
+        public List<Row> Rows { get; } = new List<Row>();
+        public bool HasMethod => GameFamily == GameFamilies.HGSS;
+        public string Where { get; private set; } = "";
+        /// <summary>hg-engine: the rows are src/swarms.c's sSwarmMapLUT.</summary>
+        public bool FromSource { get; private set; }
+        public bool InExpansion => _path == Filesystem.ExpArmPath;
+        /// <summary>Rows that fit where the table is now without moving it.</summary>
+        public int Capacity { get; private set; }
+
+        private readonly SwarmSites _sites;
+        private string _path;
+        private int _offset;
+        private int _blockStart = -1, _blockLength;
+
+        private SwarmTable(SwarmSites sites) { _sites = sites; }
+
+        /// <summary>The code file holding the swarm code's pointers and counts.</summary>
+        public string CodePath => _sites.Overlay < 0 ? Arm9Path : OverlayUtils.GetPath(_sites.Overlay);
+
+        /// <summary>The most rows the game can pick from: the count is a byte immediate.</summary>
+        public const int MaxRows = 255;
+
+        /// <summary>Whether the table already sits in a block with room for <see cref="MaxRows"/>.</summary>
+        public bool Expanded => InExpansion && Capacity >= MaxRows;
+
+        public static string WhyNot()
+        {
+            if (HgEngine.HgEngineProject.IsActive)
+                return HgEngine.HgEngineSwarms.WhyNot() ?? (HgEngine.HgEngineSwarms.TryRead(out _, out string error) ? null : error);
+            SwarmSites sites = RomLocator.SwarmSites;
+            if (sites == null) return "Works on " + DescribeDumps(RomLocator.SwarmDumps) + ".";
+            if (sites.Overlay < 0 && !IsDsRomProject && ARM9.CheckCompressionMark()) return "arm9 is still compressed. Convert this project to ds-rom format first.";
+            try { Load(); }
+            catch (Exception e) when (e is InvalidDataException || e is IOException || e is ArgumentException) { return e.Message; }
+            return null;
+        }
+
+        private byte[] ReadCode()
+        {
+            if (_sites.Overlay >= 0 && OverlayUtils.IsCompressed(_sites.Overlay)) OverlayUtils.Decompress(_sites.Overlay);
+            return File.ReadAllBytes(CodePath);
+        }
+
+        public static SwarmTable Load()
+        {
+            if (HgEngine.HgEngineProject.IsActive)
+            {
+                if (!HgEngine.HgEngineSwarms.TryRead(out List<(ushort Header, ushort Method)> rows, out string error)) throw new InvalidDataException(error);
+                SwarmTable source = new SwarmTable(null) { FromSource = true, Capacity = 255, Where = "in " + HgEngine.HgEngineSwarms.RelPath };
+                source.Rows.AddRange(rows.Select(r => new Row { Header = r.Header, Method = r.Method }));
+                return source;
+            }
+            SwarmSites sites = RomLocator.SwarmSites ?? throw new InvalidOperationException("This game version isn't supported yet.");
+            SwarmTable table = new SwarmTable(sites);
+            byte[] code = table.ReadCode();
+
+            List<uint> targets = sites.Literals.Select(o => BitConverter.ToUInt32(code, o)).Distinct().ToList();
+            if (targets.Count != 1) throw new InvalidDataException("The swarm code points at more than one table; DSPRE can't tell which is used.");
+            uint ram = targets[0];
+            if (sites.LiteralsPlus2.Any(o => BitConverter.ToUInt32(code, o) != ram + 2))
+                throw new InvalidDataException("The swarm code's table pointers don't agree with each other.");
+            List<(byte, byte)> counts = sites.CountSites.Select(o => (code[o], code[o + 1])).Distinct().ToList();
+            if (counts.Count != 1 || counts[0].Item2 != 0x21) throw new InvalidDataException("The swarm code's row count doesn't look like the game's; it may have been patched.");
+            int count = counts[0].Item1;
+
+            RamAddress.Region home = sites.Overlay < 0 ? RamAddress.Arm9(code.Length) : RamAddress.Overlay(sites.Overlay, code.Length);
+            (int region, int offset) = RamAddress.Find(ram, count * sites.RowSize,
+                home, RamAddress.Synthetic(File.Exists(Filesystem.ExpArmPath) ? new FileInfo(Filesystem.ExpArmPath).Length : 0));
+            if (region == 0)
+            {
+                table._path = table.CodePath; table._offset = offset;
+                bool vanilla = table._offset == sites.Table;
+                table.Capacity = vanilla ? sites.Rows : count;
+                table.Where = vanilla ? "where the game keeps it" : "moved by a patch";
+            }
+            else if (region == 1)
+            {
+                byte[] synth = File.ReadAllBytes(Filesystem.ExpArmPath);
+                table._path = Filesystem.ExpArmPath; table._offset = offset;
+                (long Start, long End) block = SyntheticOverlaySpace.Blocks(synth, Marker).FirstOrDefault(b => table._offset == b.Start + SyntheticOverlaySpace.HeaderSize);
+                if (block.End > 0)
+                {
+                    table._blockStart = (int)block.Start; table._blockLength = (int)(block.End - block.Start);
+                    table.Capacity = (table._blockLength - SyntheticOverlaySpace.HeaderSize) / sites.RowSize;
+                }
+                else table.Capacity = count;
+                table.Where = "in the expanded ARM9 area";
+            }
+            else throw new InvalidDataException($"The swarm table was moved to 0x{ram:X8}, which DSPRE can't follow.");
+
+            byte[] data = File.ReadAllBytes(table._path);
+            if (table._offset + count * sites.RowSize > data.Length) throw new InvalidDataException("The swarm table runs past the end of its file.");
+            for (int i = 0; i < count; i++)
+            {
+                int o = table._offset + i * sites.RowSize;
+                table.Rows.Add(table.HasMethod
+                    ? new Row { Header = BitConverter.ToUInt16(data, o), Method = BitConverter.ToUInt16(data, o + 2) }
+                    : new Row { Header = (ushort)BitConverter.ToUInt32(data, o) });
+            }
+            return table;
+        }
+
+        private byte[] RowBytes()
+        {
+            byte[] bytes = new byte[Rows.Count * (_sites?.RowSize ?? 4)];
+            for (int i = 0; i < Rows.Count; i++)
+            {
+                if (HasMethod)
+                {
+                    BitConverter.GetBytes(Rows[i].Header).CopyTo(bytes, i * 4);
+                    BitConverter.GetBytes(Rows[i].Method).CopyTo(bytes, i * 4 + 2);
+                }
+                else BitConverter.GetBytes((uint)Rows[i].Header).CopyTo(bytes, i * 4);
+            }
+            return bytes;
+        }
+
+        /// <summary>The table outgrew its room; the toolbox patch makes more.</summary>
+        public bool NeedsExpansion => !FromSource && !FitsWhereItIs;
+
+        /// <summary>Why the table can't be saved, or null.</summary>
+        /// <param name="hasSwarmSpecies">HGSS: whether the row's method has a swarm species in its header's encounter file.</param>
+        public string Problem(int headerCount, Func<ushort, bool> hasEncounters, Func<Row, bool> hasSwarmSpecies = null)
+        {
+            if (Rows.Count == 0) return "The swarm table needs at least one row.";
+            if (Rows.Count > 255) return "The game can pick from up to 255 swarm rows.";
+            if (NeedsExpansion)
+                return $"The swarm table only has room for {Capacity} rows. The \"Swarm table expansion\" patch in the ROM patch toolbox makes room for {MaxRows}.";
+            for (int i = 0; i < Rows.Count; i++)
+            {
+                if (Rows[i].Header >= headerCount) return $"Row {i + 1} points at a header that doesn't exist.";
+                if (hasEncounters != null && !hasEncounters(Rows[i].Header)) return $"Row {i + 1}: header {Rows[i].Header} has no wild encounters, so its swarm would have no Pokémon.";
+                if (HasMethod && Rows[i].Method > 2) return $"Row {i + 1} has an encounter method the game doesn't know.";
+                // HGSS asserts the picked swarm species isn't 0.
+                if (HasMethod && hasSwarmSpecies != null && !hasSwarmSpecies(Rows[i]))
+                    return $"Row {i + 1}: header {Rows[i].Header} has no {MethodNames[Rows[i].Method].ToLowerInvariant()} swarm Pokémon.";
+            }
+            return null;
+        }
+
+        public bool FitsWhereItIs => Rows.Count <= Capacity;
+
+        public void Save(int headerCount, Func<ushort, bool> hasEncounters, Func<Row, bool> hasSwarmSpecies = null)
+        {
+            if (Problem(headerCount, hasEncounters, hasSwarmSpecies) is string p) throw new InvalidOperationException(p);
+            if (FromSource)
+            {
+                if (!HgEngine.HgEngineSwarms.TryWrite(Rows.Select(r => (r.Header, r.Method)).ToList(), out string error))
+                    throw new InvalidOperationException(error);
+                return;
+            }
+            byte[] code = ReadCode(), codeBefore = (byte[])code.Clone();
+            byte[] rows = RowBytes();
+
+            if (FitsWhereItIs)
+            {
+                if (_path == CodePath)
+                {
+                    Array.Clear(code, _offset, Capacity * _sites.RowSize);
+                    rows.CopyTo(code, _offset);
+                }
+                else
+                {
+                    byte[] synth = File.ReadAllBytes(Filesystem.ExpArmPath), synthOld = (byte[])synth.Clone();
+                    Array.Clear(synth, _offset, Capacity * _sites.RowSize);
+                    rows.CopyTo(synth, _offset);
+                    if (_blockStart >= 0) BitConverter.GetBytes((uint)Rows.Count).CopyTo(synth, _blockStart + 0x14);
+                    foreach (int o in _sites.CountSites) code[o] = (byte)Rows.Count;
+                    try
+                    {
+                        DSUtils.WriteWholeFile(Filesystem.ExpArmPath, synth);
+                        DSUtils.WriteWholeFile(CodePath, code);
+                    }
+                    catch
+                    {
+                        DSUtils.WriteWholeFile(Filesystem.ExpArmPath, synthOld);
+                        DSUtils.WriteWholeFile(CodePath, codeBefore);
+                        throw;
+                    }
+                    return;
+                }
+                foreach (int o in _sites.CountSites) code[o] = (byte)Rows.Count;
+                DSUtils.WriteWholeFile(CodePath, code);
+                return;
+            }
+
+            throw new InvalidOperationException($"The swarm table only has room for {Capacity} rows.");
+        }
+
+        /// <summary>
+        /// Moves the table, as saved, into its own expanded ARM9 block with room for <see cref="MaxRows"/> rows and points
+        /// the swarm code at it. The toolbox patch calls this; the editor never moves the table itself.
+        /// </summary>
+        /// <summary>The size of the block the toolbox patch places.</summary>
+        public int ExpansionBlockLength => (SyntheticOverlaySpace.HeaderSize + MaxRows * _sites.RowSize + 3) & ~3;
+
+        public void MoveToExpansion()
+        {
+            if (FromSource || Expanded) return;
+            if (!SyntheticOverlaySpace.Available()) throw new InvalidOperationException("Apply the ARM9 expansion in the ROM patch toolbox first.");
+            byte[] code = ReadCode(), codeBefore = (byte[])code.Clone();
+            byte[] rows = RowBytes();
+            byte[] synthNow = File.ReadAllBytes(Filesystem.ExpArmPath), synthBefore = (byte[])synthNow.Clone();
+            byte[] block = new byte[ExpansionBlockLength];
+            Encoding.ASCII.GetBytes(Marker).CopyTo(block, 0);
+            BitConverter.GetBytes(1u).CopyTo(block, 0x0C);
+            BitConverter.GetBytes((uint)block.Length).CopyTo(block, 0x10);
+            BitConverter.GetBytes((uint)Rows.Count).CopyTo(block, 0x14);
+            rows.CopyTo(block, SyntheticOverlaySpace.HeaderSize);
+
+            // A smaller block from an older DSPRE is freed for the new one.
+            if (_blockStart >= 0) Array.Clear(synthNow, _blockStart, _blockLength);
+            int at = SyntheticOverlaySpace.Place(synthNow, block.Length, SyntheticOverlaySpace.Reserved(synthNow));
+            if (at < 0) throw new InvalidOperationException("No free space was found in the expanded ARM9 area for the swarm table.");
+            block.CopyTo(synthNow, at);
+            uint ram = SynthOverlayLoadAddress + (uint)(at + SyntheticOverlaySpace.HeaderSize);
+            foreach (int o in _sites.Literals) BitConverter.GetBytes(ram).CopyTo(code, o);
+            foreach (int o in _sites.LiteralsPlus2) BitConverter.GetBytes(ram + 2).CopyTo(code, o);
+            foreach (int o in _sites.CountSites) code[o] = (byte)Rows.Count;
+            try
+            {
+                DSUtils.WriteWholeFile(Filesystem.ExpArmPath, synthNow);
+                DSUtils.WriteWholeFile(CodePath, code);
+            }
+            catch
+            {
+                DSUtils.WriteWholeFile(Filesystem.ExpArmPath, synthBefore);
+                DSUtils.WriteWholeFile(CodePath, codeBefore);
+                throw;
+            }
+            _path = Filesystem.ExpArmPath; _offset = at + SyntheticOverlaySpace.HeaderSize;
+            _blockStart = at; _blockLength = block.Length;
+            Capacity = (block.Length - SyntheticOverlaySpace.HeaderSize) / _sites.RowSize;
+            Where = "in the expanded ARM9 area";
+        }
+
+        public byte[] Snapshot() => RowBytes().Concat(BitConverter.GetBytes(Rows.Count)).ToArray();
+    }
+}

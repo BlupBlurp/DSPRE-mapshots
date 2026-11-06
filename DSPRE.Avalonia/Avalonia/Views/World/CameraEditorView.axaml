@@ -1,0 +1,160 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:DSPRE.Avalonia.ViewModels.World"
+             xmlns:vc="clr-namespace:DSPRE.Avalonia.Views.Controls"
+             xmlns:controls="clr-namespace:DSPRE.Avalonia.Controls"
+             x:Class="DSPRE.Avalonia.Views.World.CameraEditorView"
+             x:DataType="vm:CameraEditorViewModel">
+  <Design.DataContext>
+    <vm:CameraEditorViewModel/>
+  </Design.DataContext>
+
+  <DockPanel>
+
+    <controls:EditorToolbar>
+        <controls:HeadersButton controls:EditorToolbar.Slot="Picker" Source="Camera" FileId="{Binding SelectedCameraIndex}"
+                                ToolTip.Tip="Map headers that use this camera"/>
+        <Button Content="Save" controls:Icon.Key="saveButton"    Click="SaveTable_Click" IsEnabled="{Binding HasUnsavedChanges}"/>
+        <Button Content="Discard" controls:Icon.Key="resetIcon" Click="Discard_Click"   IsEnabled="{Binding HasUnsavedChanges}"/>
+        <controls:UndoRedoButtons/>
+        <Button Content="Export table…" controls:Icon.Key="export" Click="ExportTable_Click" IsEnabled="{Binding IsReady}" MinWidth="100"/>
+        <Button Content="Import table…" controls:Icon.Key="import" Click="ImportTable_Click" IsEnabled="{Binding IsReady}" MinWidth="100"/>
+        <Button Content="Rename…" controls:Icon.Key="pencil" Click="Rename_Click" IsEnabled="{Binding IsReady}"/>
+        <Button Content="Export camera…" controls:Icon.Key="export" Click="ExportCamera_Click" IsEnabled="{Binding IsReady}"/>
+        <Button Content="Import camera…" controls:Icon.Key="import" Click="ImportCamera_Click" IsEnabled="{Binding IsReady}"/>
+    </controls:EditorToolbar>
+
+    <Border DockPanel.Dock="Bottom" Background="{DynamicResource Editor.StatusBg}" BorderBrush="{DynamicResource Editor.Border}"
+            BorderThickness="0,1,0,0" Padding="8,3">
+      <TextBlock Text="{Binding StatusText}" FontSize="12" Foreground="{DynamicResource Editor.Subtle}"
+                 VerticalAlignment="Center"/>
+    </Border>
+
+    <ListBox DockPanel.Dock="Left" Width="220" Margin="4"
+             ItemsSource="{Binding Cameras}" SelectedItem="{Binding SelectedCamera}">
+      <ListBox.ItemTemplate>
+        <DataTemplate x:DataType="vm:CameraRowVM">
+          <TextBlock Text="{Binding Label}"/>
+        </DataTemplate>
+      </ListBox.ItemTemplate>
+    </ListBox>
+
+    <ScrollViewer DockPanel.Dock="Left" Width="220" Margin="0,4" DataContext="{Binding SelectedCamera}"
+                  IsEnabled="{Binding $self.DataContext, Converter={x:Static ObjectConverters.IsNotNull}}">
+      <StackPanel Spacing="6" Margin="0,0,8,0" x:DataType="vm:CameraRowVM">
+        <GroupBox Header="Placement">
+          <StackPanel Spacing="8">
+            <StackPanel Spacing="2">
+              <TextBlock Classes="fieldlabel" Text="Distance"/>
+              <StackPanel Orientation="Horizontal" Spacing="6">
+                <NumericUpDown Width="120" Minimum="0" Maximum="65535" Increment="0.5" FormatString="0.###"
+                               Value="{Binding Distance}"/>
+                <TextBlock Text="tiles" VerticalAlignment="Center" Foreground="{DynamicResource Editor.Subtle}"/>
+              </StackPanel>
+            </StackPanel>
+            <StackPanel Spacing="2">
+              <TextBlock Classes="fieldlabel" Text="Tilt"/>
+              <StackPanel Orientation="Horizontal" Spacing="6">
+                <NumericUpDown Width="120" Minimum="-180" Maximum="180" Increment="1" FormatString="0.##"
+                               Value="{Binding Tilt}" ToolTip.Tip="How far it looks down"/>
+                <TextBlock Text="degrees" VerticalAlignment="Center" Foreground="{DynamicResource Editor.Subtle}"/>
+              </StackPanel>
+            </StackPanel>
+            <StackPanel Spacing="2">
+              <TextBlock Classes="fieldlabel" Text="Turn"/>
+              <StackPanel Orientation="Horizontal" Spacing="6">
+                <NumericUpDown Width="120" Minimum="-180" Maximum="180" Increment="1" FormatString="0.##"
+                               Value="{Binding Turn}" ToolTip.Tip="0 faces north"/>
+                <TextBlock Text="degrees" VerticalAlignment="Center" Foreground="{DynamicResource Editor.Subtle}"/>
+              </StackPanel>
+            </StackPanel>
+            <StackPanel Spacing="2" IsVisible="{Binding $parent[UserControl].((vm:CameraEditorViewModel)DataContext).ShowsRoll}">
+              <TextBlock Classes="fieldlabel" Text="Roll"/>
+              <StackPanel Orientation="Horizontal" Spacing="6">
+                <NumericUpDown Width="120" Minimum="-90" Maximum="90" Increment="1" FormatString="0.##"
+                               Value="{Binding Roll}"/>
+                <TextBlock Text="degrees" VerticalAlignment="Center" Foreground="{DynamicResource Editor.Subtle}"/>
+              </StackPanel>
+            </StackPanel>
+          </StackPanel>
+        </GroupBox>
+        <GroupBox Header="Lens">
+          <StackPanel Spacing="8">
+            <StackPanel Spacing="2">
+              <TextBlock Classes="fieldlabel" Text="View"/>
+              <ComboBox Width="120" HorizontalAlignment="Left" SelectedIndex="{Binding ViewIndex}">
+                <ComboBoxItem Content="Perspective"/>
+                <ComboBoxItem Content="Flat"/>
+              </ComboBox>
+            </StackPanel>
+            <StackPanel Spacing="2">
+              <TextBlock Classes="fieldlabel" Text="Field of view"/>
+              <StackPanel Orientation="Horizontal" Spacing="6">
+                <NumericUpDown Width="120" Minimum="0" Maximum="720" Increment="0.5" FormatString="0.##"
+                               Value="{Binding FieldOfView}" ToolTip.Tip="Top to bottom"/>
+                <TextBlock Text="degrees" VerticalAlignment="Center" Foreground="{DynamicResource Editor.Subtle}"/>
+              </StackPanel>
+            </StackPanel>
+            <StackPanel Spacing="2">
+              <TextBlock Classes="fieldlabel" Text="Near clip"/>
+              <StackPanel Orientation="Horizontal" Spacing="6">
+                <NumericUpDown Width="120" Minimum="0" Maximum="65535" Increment="1" FormatString="0.###"
+                               Value="{Binding NearClip}" ToolTip.Tip="Nothing closer is drawn"/>
+                <TextBlock Text="tiles" VerticalAlignment="Center" Foreground="{DynamicResource Editor.Subtle}"/>
+              </StackPanel>
+            </StackPanel>
+            <StackPanel Spacing="2">
+              <TextBlock Classes="fieldlabel" Text="Far clip"/>
+              <StackPanel Orientation="Horizontal" Spacing="6">
+                <NumericUpDown Width="120" Minimum="0" Maximum="65535" Increment="1" FormatString="0.###"
+                               Value="{Binding FarClip}" ToolTip.Tip="Nothing farther is drawn"/>
+                <TextBlock Text="tiles" VerticalAlignment="Center" Foreground="{DynamicResource Editor.Subtle}"/>
+              </StackPanel>
+            </StackPanel>
+          </StackPanel>
+        </GroupBox>
+        <GroupBox Header="Shift" IsVisible="{Binding $parent[UserControl].((vm:CameraEditorViewModel)DataContext).IsHgss}" ToolTip.Tip="Moves the camera and its view together">
+          <StackPanel Spacing="8">
+            <StackPanel Spacing="2">
+              <TextBlock Classes="fieldlabel" Text="X"/>
+              <StackPanel Orientation="Horizontal" Spacing="6">
+                <NumericUpDown Width="120" Minimum="-32768" Maximum="32768" Increment="0.25" FormatString="0.###"
+                               Value="{Binding ShiftX}" ToolTip.Tip="East"/>
+                <TextBlock Text="tiles" VerticalAlignment="Center" Foreground="{DynamicResource Editor.Subtle}"/>
+              </StackPanel>
+            </StackPanel>
+            <StackPanel Spacing="2">
+              <TextBlock Classes="fieldlabel" Text="Y"/>
+              <StackPanel Orientation="Horizontal" Spacing="6">
+                <NumericUpDown Width="120" Minimum="-32768" Maximum="32768" Increment="0.25" FormatString="0.###"
+                               Value="{Binding ShiftY}" ToolTip.Tip="Up"/>
+                <TextBlock Text="tiles" VerticalAlignment="Center" Foreground="{DynamicResource Editor.Subtle}"/>
+              </StackPanel>
+            </StackPanel>
+            <StackPanel Spacing="2">
+              <TextBlock Classes="fieldlabel" Text="Z"/>
+              <StackPanel Orientation="Horizontal" Spacing="6">
+                <NumericUpDown Width="120" Minimum="-32768" Maximum="32768" Increment="0.25" FormatString="0.###"
+                               Value="{Binding ShiftZ}" ToolTip.Tip="South"/>
+                <TextBlock Text="tiles" VerticalAlignment="Center" Foreground="{DynamicResource Editor.Subtle}"/>
+              </StackPanel>
+            </StackPanel>
+          </StackPanel>
+        </GroupBox>
+      </StackPanel>
+    </ScrollViewer>
+
+    <!-- The preview shows the selected camera at a town's fly spot. -->
+    <StackPanel Margin="4" Spacing="4" HorizontalAlignment="Left">
+      <Border Background="{DynamicResource Editor.PanelBg}" BorderBrush="{DynamicResource Editor.Border}"
+              BorderThickness="1" Width="384" Height="288">
+        <vc:CameraPreview x:Name="CameraPreviewBox"/>
+      </Border>
+      <ComboBox ItemsSource="{Binding PreviewPlaces}" SelectedIndex="{Binding PreviewPlaceIndex}" Width="384"
+                ToolTip.Tip="Where the preview stands"/>
+      <ComboBox ItemsSource="{Binding PreviewWeather.Names}" SelectedIndex="{Binding PreviewWeatherIndex}" Width="384"
+                ToolTip.Tip="Weather"/>
+    </StackPanel>
+
+  </DockPanel>
+</UserControl>

@@ -1,0 +1,64 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:DSPRE.Avalonia.ViewModels.Pokemon"
+             xmlns:controls="clr-namespace:DSPRE.Avalonia.Controls"
+             x:Class="DSPRE.Avalonia.Views.Pokemon.SwarmsView"
+             x:DataType="vm:SwarmsViewModel">
+  <Design.DataContext>
+    <vm:SwarmsViewModel/>
+  </Design.DataContext>
+
+  <Panel>
+  <TextBlock IsVisible="{Binding !Loaded}" Text="{Binding WhyNotLoaded}" Margin="16" TextWrapping="Wrap"/>
+  <DockPanel IsVisible="{Binding Loaded}">
+    <controls:EditorToolbar>
+        <Button Content="Save" controls:Icon.Key="saveButton" Click="Save_Click" IsEnabled="{Binding HasUnsavedChanges}"/>
+        <Button Content="Discard" controls:Icon.Key="resetIcon" Click="Discard_Click" IsEnabled="{Binding HasUnsavedChanges}"/>
+        <controls:UndoRedoButtons/>
+        <Button Content="Add" controls:Icon.Key="addIcon" Click="Add_Click" IsEnabled="{Binding Loaded}" ToolTip.Tip="Every destination is equally likely"/>
+        <Button Content="Remove" controls:Icon.Key="deleteIcon" Click="Remove_Click" IsEnabled="{Binding Selected, Converter={x:Static ObjectConverters.IsNotNull}}"/>
+    </controls:EditorToolbar>
+
+    <StackPanel DockPanel.Dock="Bottom" Margin="8,4" Spacing="2">
+      <TextBlock Text="{Binding StatusText}" Foreground="{DynamicResource Editor.Subtle}" TextWrapping="Wrap"/>
+      <TextBlock Text="{Binding Problem}" IsVisible="{Binding HasProblem}" Foreground="{DynamicResource Editor.Bad}" TextWrapping="Wrap"/>
+    </StackPanel>
+
+    <DockPanel Margin="8">
+      <Grid DockPanel.Dock="Top" ColumnDefinitions="320,Auto,*" Margin="6,0,24,4">
+        <TextBlock Grid.Column="0" Text="Header" FontWeight="SemiBold"/>
+        <TextBlock Grid.Column="1" Text="Method" FontWeight="SemiBold" IsVisible="{Binding HasMethod}" Width="150"/>
+        <TextBlock Grid.Column="2" Text="Swarm Pokémon" FontWeight="SemiBold"/>
+      </Grid>
+      <ListBox ItemsSource="{Binding Rows}" SelectedItem="{Binding Selected}" KeyDown="List_KeyDown" KeyboardNavigation.TabNavigation="Continue" Background="Transparent">
+        <ListBox.ItemTemplate>
+          <DataTemplate x:DataType="vm:SwarmsViewModel+RowViewModel">
+            <Grid ColumnDefinitions="320,Auto,*">
+              <controls:FusionAutoCompleteBox AllowsNone="False" Grid.Column="0" Margin="0,0,8,0" controls:EditorLink.To="Header"
+                  ItemsSource="{Binding $parent[ListBox].((vm:SwarmsViewModel)DataContext).HeaderNames}" SelectedIndex="{Binding Header}"/>
+              <ComboBox Grid.Column="1" Margin="0,0,8,0" Width="142"
+                  IsVisible="{Binding $parent[ListBox].((vm:SwarmsViewModel)DataContext).HasMethod}"
+                  ItemsSource="{Binding $parent[ListBox].((vm:SwarmsViewModel)DataContext).MethodNames}" SelectedIndex="{Binding Method}"/>
+              <DockPanel Grid.Column="2" LastChildFill="False">
+                <ItemsControl DockPanel.Dock="Left" ItemsSource="{Binding SpeciesIds}" Margin="0,0,6,0">
+                  <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate>
+                  </ItemsControl.ItemsPanel>
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                      <Image Width="32" Height="32" Source="{Binding Converter={x:Static controls:GameIconConverter.Pokemon}}"/>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <TextBlock DockPanel.Dock="Left" Text="{Binding Species}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                <Button DockPanel.Dock="Left" Content="Open in Wild Pokémon editor" controls:Icon.Key="OpenLink" Padding="8,2" Margin="8,0,0,0" VerticalAlignment="Center"
+                        IsEnabled="{Binding HasEncounterFile}" ToolTip.Tip="{Binding OpenEncountersTip}" ToolTip.ShowOnDisabled="True" Click="OpenEncounters_Click"/>
+              </DockPanel>
+            </Grid>
+          </DataTemplate>
+        </ListBox.ItemTemplate>
+      </ListBox>
+    </DockPanel>
+  </DockPanel>
+  </Panel>
+</UserControl>

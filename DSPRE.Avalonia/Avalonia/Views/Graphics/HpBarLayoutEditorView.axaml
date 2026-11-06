@@ -1,0 +1,141 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="clr-namespace:DSPRE.Avalonia.Controls"
+        xmlns:vm="clr-namespace:DSPRE.Avalonia.ViewModels.Graphics"
+        x:Class="DSPRE.Avalonia.Views.Graphics.HpBarLayoutEditorView"
+        x:DataType="vm:HpBarLayoutEditorViewModel">
+
+  <Design.DataContext>
+    <vm:HpBarLayoutEditorViewModel/>
+  </Design.DataContext>
+
+  <UserControl.Styles>
+    <Style Selector="TextBlock.hint">
+      <Setter Property="FontSize" Value="12"/>
+      <Setter Property="Foreground" Value="{DynamicResource Editor.Subtle}"/>
+      <Setter Property="TextWrapping" Value="Wrap"/>
+    </Style>
+  </UserControl.Styles>
+
+  <DockPanel>
+    <Border DockPanel.Dock="Bottom" Background="{DynamicResource Editor.StatusBg}"
+            BorderBrush="{DynamicResource Editor.Border}" BorderThickness="0,1,0,0" Padding="8,3">
+      <TextBlock Text="{Binding StatusText}" Classes="hint" VerticalAlignment="Center"/>
+    </Border>
+
+    <controls:EditorToolbar>
+      <Button Content="Save" controls:Icon.Key="saveButton" Click="Save_Click" IsEnabled="{Binding CanSave}"
+              ToolTip.Tip="{Binding SaveHelp}"/>
+      <Button Content="Discard" controls:Icon.Key="resetIcon" Click="Discard_Click" IsEnabled="{Binding HasUnsavedChanges}"/>
+      <controls:UndoRedoButtons/>
+      <StackPanel controls:EditorToolbar.Slot="Picker" Orientation="Horizontal" Spacing="6" Margin="0,0,16,4">
+        <TextBlock Text="Bar" VerticalAlignment="Center"/>
+        <ComboBox Width="220" ItemsSource="{Binding BarNames}" SelectedIndex="{Binding BarIndex}"/>
+      </StackPanel>
+      <Button Content="Import PNG…" controls:Icon.Key="import" Click="Import_Click" ToolTip.Tip="A picture of this bar as it looks in battle"/>
+      <StackPanel Orientation="Horizontal" Spacing="6" Margin="16,0,0,4">
+        <TextBlock Text="Sample name" VerticalAlignment="Center"/>
+        <TextBox Width="120" Text="{Binding SampleName}"/>
+      </StackPanel>
+      <Button Content="Open in ROM patch toolbox" controls:Icon.Key="OpenLink" Margin="16,0,0,4" Click="TextBackgroundPatch_Click"
+              IsVisible="{Binding CanClearTextBackground}" ToolTip.Tip="{Binding ClearTextBackgroundHelp}"/>
+    </controls:EditorToolbar>
+
+    <!-- The parts, by name -->
+    <Border x:Name="PartList" DockPanel.Dock="Left" Width="370" BorderBrush="{DynamicResource Editor.Border}" BorderThickness="0,0,1,0">
+      <DockPanel Margin="8">
+        <TextBlock DockPanel.Dock="Top" Text="Parts" FontWeight="SemiBold" Margin="0,0,0,6"/>
+        <Button DockPanel.Dock="Top" Content="Open in ROM patch toolbox" controls:Icon.Key="OpenLink" Margin="0,0,0,6" Click="FontPatch_Click"
+                IsVisible="{Binding OffersFontPatch}" ToolTip.Tip="Lets the names use another font"/>
+        <ItemsControl ItemsSource="{Binding Parts}">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="vm:HpBarPartRow">
+              <StackPanel Margin="0,2" Spacing="2">
+              <StackPanel Orientation="Horizontal" Spacing="6">
+                <Border Width="12" Height="12" Background="{Binding Colour}" BorderBrush="{Binding Outline}" BorderThickness="2"
+                        VerticalAlignment="Center"/>
+                <TextBlock Text="{Binding Name}" Width="84" VerticalAlignment="Center"/>
+                <controls:IconImage Key="warning" Width="14" Height="14" VerticalAlignment="Center" IsVisible="{Binding Flagged}"
+                                    ToolTip.Tip="{Binding Problem, TargetNullValue='Shows over the bar drawing or another part in battle'}"/>
+                <Panel Width="14" IsVisible="{Binding !Flagged}"/>
+                <NumericUpDown Value="{Binding Column}" Minimum="0" Maximum="15" Increment="1" FormatString="0" Width="64"
+                               ToolTip.Tip="Column"/>
+                <NumericUpDown Value="{Binding Row}" Minimum="0" Maximum="7" Increment="1" FormatString="0" Width="64"
+                               ToolTip.Tip="Row"/>
+                <NumericUpDown Value="{Binding Length}" Minimum="1" Maximum="{Binding MaxLength}" Increment="1" FormatString="0" Width="64"
+                               IsVisible="{Binding HasLength}" ToolTip.Tip="Length in squares"/>
+              </StackPanel>
+              <ComboBox Margin="18,0,0,0" Width="180" ItemsSource="{Binding FontNames}" SelectedIndex="{Binding FontIndex}"
+                        IsVisible="{Binding CanPickFont}" ToolTip.Tip="Font"/>
+              </StackPanel>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </DockPanel>
+    </Border>
+
+    <!-- The bar, with every part as a box to drag -->
+    <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+      <StackPanel Margin="16" Spacing="10">
+        <Border BorderBrush="{DynamicResource Editor.Border}" BorderThickness="1" HorizontalAlignment="Left"
+                Background="{DynamicResource Editor.PanelBg}">
+          <Panel x:Name="Board" Width="640" Height="320" PointerPressed="Board_Pressed" PointerMoved="Board_Moved"
+                 PointerReleased="Board_Released" Background="Transparent">
+            <Image Source="{Binding BarPicture}" Width="640" Height="320" Stretch="Fill"
+                   RenderOptions.BitmapInterpolationMode="None" IsHitTestVisible="False"/>
+            <Canvas x:Name="Grid" IsHitTestVisible="False"/>
+            <ItemsControl ItemsSource="{Binding Parts}" IsHitTestVisible="False">
+              <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate><Canvas/></ItemsPanelTemplate>
+              </ItemsControl.ItemsPanel>
+              <ItemsControl.Styles>
+                <Style Selector="ContentPresenter" x:DataType="vm:HpBarPartRow">
+                  <Setter Property="Canvas.Left" Value="{Binding Left}"/>
+                  <Setter Property="Canvas.Top" Value="{Binding Top}"/>
+                </Style>
+              </ItemsControl.Styles>
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:HpBarPartRow">
+                  <Border Width="{Binding Width}" Height="{Binding Height}" BorderBrush="{Binding Outline}" BorderThickness="2"
+                          Background="{Binding Fill}" ToolTip.Tip="{Binding Problem}">
+                    <TextBlock Text="{Binding Name}" FontSize="11" Margin="3,1" Foreground="{Binding Colour}"
+                               FontWeight="SemiBold"/>
+                  </Border>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </Panel>
+        </Border>
+        <TextBlock Text="{Binding Problems}" Foreground="{DynamicResource Editor.Bad}" TextWrapping="Wrap" MaxWidth="640"
+                   HorizontalAlignment="Left" IsVisible="{Binding HasProblems}"/>
+
+        <!-- The battle as it will look, and where the bar sits -->
+        <StackPanel x:Name="BattlePreview" Spacing="8">
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <TextBlock Text="Position" FontWeight="SemiBold" VerticalAlignment="Center"/>
+            <TextBlock Text="X" VerticalAlignment="Center"/>
+            <NumericUpDown Value="{Binding ScreenX}" Minimum="-64" Maximum="320" Increment="1" FormatString="0" Width="120"/>
+            <TextBlock Text="Y" VerticalAlignment="Center"/>
+            <NumericUpDown Value="{Binding ScreenY}" Minimum="-32" Maximum="224" Increment="1" FormatString="0" Width="120"/>
+          </StackPanel>
+          <ItemsControl ItemsSource="{Binding Shots}">
+            <ItemsControl.ItemsPanel>
+              <ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="vm:HpBarShot">
+                <StackPanel Spacing="4" Margin="0,0,12,8">
+                  <TextBlock Text="{Binding Label}" FontWeight="SemiBold"/>
+                  <Border BorderBrush="{DynamicResource Editor.Border}" BorderThickness="1" HorizontalAlignment="Left">
+                    <Image Source="{Binding Picture}" Width="512" Height="384" Stretch="Fill"
+                           RenderOptions.BitmapInterpolationMode="None"/>
+                  </Border>
+                </StackPanel>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </StackPanel>
+      </StackPanel>
+    </ScrollViewer>
+  </DockPanel>
+</UserControl>

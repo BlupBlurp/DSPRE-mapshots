@@ -10,7 +10,6 @@ on:
   workflow_dispatch:
 
 env:
-  SOLUTION_FILE_PATH: DS_Map.sln
   BUILD_CONFIGURATION: Release
 
 jobs:
@@ -42,7 +41,7 @@ jobs:
         id: get_version
         shell: bash
         run: |
-          dotnet_version=$(grep -oE '\[assembly: AssemblyVersion\("([0-9\.]+)"\)\]' DS_Map/Properties/AssemblyInfo.cs | sed -E 's/.*AssemblyVersion\("([0-9\.]+)"\).*/\1/')
+          dotnet_version=$(grep -oE '<AssemblyVersion>[0-9.]+</AssemblyVersion>' DSPRE.Avalonia/DSPRE.Avalonia.csproj | sed -E 's/<AssemblyVersion>([0-9.]+)<\/AssemblyVersion>/\1/')
           major=$(echo "$dotnet_version" | cut -d. -f1)
           minor=$(echo "$dotnet_version" | cut -d. -f2)
 
@@ -59,7 +58,7 @@ jobs:
                   semver_version="${major}.${minor}.${incremented_patch}-rev${revision}"
               fi
 
-              # Same trim rule as Helpers.GetDSPREVersion() in C#: drop trailing zero components, so the
+              # Same trim rule as AppInfo.GetDSPREVersion() in C#: drop trailing zero components, so the
               # release name reads "DSPRE 2.1" instead of "DSPRE 2.1.0.0".
               if [ "$revision" != "0" ]; then
                   display_version="${major}.${minor}.${patch}.${revision}"
@@ -93,8 +92,17 @@ jobs:
           echo "Display version: ${{ steps.get_version.outputs.display_version }}"
           echo "Release tag: ${{ steps.get_version.outputs.release_tag }}"
 
-      - name: Add MSBuild to PATH
-        uses: microsoft/setup-msbuild@v2
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          # Avalonia 12 needs a newer compiler than SDK 8 has; the 8 runtime runs the net8.0 app and tests.
+          dotnet-version: |
+            8.0.x
+            10.0.x
+        if: ${{ needs.get_latest_tag.outputs.latest_tag != steps.get_version.outputs.release_tag }}
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
         if: ${{ needs.get_latest_tag.outputs.latest_tag != steps.get_version.outputs.release_tag }}
 
       - name: Clone Database Repository
@@ -102,40 +110,63 @@ jobs:
         run: |
           git clone https://github.com/DS-Pokemon-Rom-Editor/scrcmd-database.git databases
 
-      - name: Restore NuGet packages
-        working-directory: ${{env.GITHUB_WORKSPACE}}
-        run: nuget restore ${{env.SOLUTION_FILE_PATH}}
-        if: ${{ needs.get_latest_tag.outputs.latest_tag != steps.get_version.outputs.release_tag }}
-
-      - name: Build DSPRE
-        working-directory: ${{env.GITHUB_WORKSPACE}}
-        run: msbuild /m /p:Configuration=${{env.BUILD_CONFIGURATION}} ${{env.SOLUTION_FILE_PATH}}
+      - name: Publish DSPRE (win-x64)
+        run: dotnet publish DSPRE.Avalonia/DSPRE.Avalonia.csproj -p:PublishProfile=win-x64 -o publish
         if: ${{ needs.get_latest_tag.outputs.latest_tag != steps.get_version.outputs.release_tag }}
 
       - name: Copy output manually
         if: ${{ needs.get_latest_tag.outputs.latest_tag != steps.get_version.outputs.release_tag }}
         run: |
-          mkdir -p publish
-          cp -r DS_Map/bin/${{env.BUILD_CONFIGURATION}}/* publish/
+          # Installed copies update through DSPRE.exe; the launcher still finds DSPRE.Avalonia.dll by name.
+          Rename-Item -Path publish/DSPRE.Avalonia.exe -NewName DSPRE.exe
           mkdir -p "publish/databases"
-          robocopy databases "publish/databases" /E /XD "databases\.git\objects\pack"
+          robocopy databases "publish/databases" /E /XD .git .github /XF .gitmodules
           if ($LASTEXITCODE -le 7) { exit 0 } else { exit 1 }
           ls publish/
+
+      - name: Build apicula.exe
+        if: ${{ needs.get_latest_tag.outputs.latest_tag != steps.get_version.outputs.release_tag }}
+        uses: ./.github/actions/build-apicula
+        with:
+          output-directory: publish/Tools
+
+      - name: Build rotom.exe
+        if: ${{ needs.get_latest_tag.outputs.latest_tag != steps.get_version.outputs.release_tag }}
+        uses: ./.github/actions/build-rotom
+        with:
+          output-directory: publish/Tools
+
+      - name: Build chatot
+        if: ${{ needs.get_latest_tag.outputs.latest_tag != steps.get_version.outputs.release_tag }}
+        uses: ./.github/actions/build-chatot
+        with:
+          output-directory: publish/Tools
+
+      # The same files without Velopack's updater, for antivirus that blocks it. This copy doesn't update itself.
+      - name: Zip without updater
+        if: ${{ needs.get_latest_tag.outputs.latest_tag != steps.get_version.outputs.release_tag }}
+        run: Compress-Archive -Path publish/* -DestinationPath DSPRE-win-x64-NoUpdater.zip
 
       - name: Create Velopack Release
         if: ${{ needs.get_latest_tag.outputs.latest_tag != steps.get_version.outputs.release_tag }}
         run: |
-            dotnet tool install -g vpk
+            dotnet tool install -g vpk --version 1.2.161
             vpk download github --repoUrl https://github.com/${{ github.repository }} --token ${{ secrets.GH_TOKEN }}
 
             # First, check if we need to delete existing Velopack release for same base version
             echo "Checking for existing Velopack releases with same base version..."
 
             # Use the correct syntax for vpk pack
-            vpk pack --packDir publish --mainExe DSPRE.exe -u DSPRE -v ${{ steps.get_version.outputs.semver_version }} --channel win
+            vpk pack --packDir publish --mainExe DSPRE.exe -u DSPRE -v ${{ steps.get_version.outputs.semver_version }} --channel win --packAuthors "DS-Pokemon-Rom-Editor"
 
             # Upload to GitHub releases
             vpk upload github --publish --repoUrl https://github.com/${{ github.repository }} --releaseName "DSPRE ${{ steps.get_version.outputs.display_version }}" --tag ${{ steps.get_version.outputs.release_tag }} --token ${{ secrets.GH_TOKEN }}
+
+      - name: Attach zip without updater
+        if: ${{ needs.get_latest_tag.outputs.latest_tag != steps.get_version.outputs.release_tag }}
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: gh release upload "${{ steps.get_version.outputs.release_tag }}" DSPRE-win-x64-NoUpdater.zip --repo "${{ github.repository }}" --clobber
 
       - name: Attach changelog to release notes
         if: ${{ needs.get_latest_tag.outputs.latest_tag != steps.get_version.outputs.release_tag }}
@@ -165,3 +196,126 @@ jobs:
           else
             gh release edit "${{ steps.get_version.outputs.release_tag }}" --repo "${{ github.repository }}" --notes-file "$notes_file"
           fi
+
+  deploy_linux_to_github_releases:
+    if: github.repository == 'DS-Pokemon-Rom-Editor/DSPRE'
+    name: Deploy Linux to GitHub Releases
+    # Runs after the Windows deploy so vpk upload attaches the linux-channel assets
+    # (AppImage + releases.linux.json + nupkgs) to the release that job created.
+    needs: [get_latest_tag, deploy_to_github_releases]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Get Version from Project File
+        id: get_version
+        shell: bash
+        run: |
+          dotnet_version=$(grep -oE '<AssemblyVersion>[0-9.]+</AssemblyVersion>' DSPRE.Avalonia/DSPRE.Avalonia.csproj | sed -E 's/<AssemblyVersion>([0-9.]+)<\/AssemblyVersion>/\1/')
+          major=$(echo "$dotnet_version" | cut -d. -f1)
+          minor=$(echo "$dotnet_version" | cut -d. -f2)
+
+          if echo "$dotnet_version" | grep -q '^[0-9]\+\.[0-9]\+\.[0-9]\+\.[0-9]\+$'; then
+              patch=$(echo "$dotnet_version" | sed -E 's/^[0-9]+\.[0-9]+\.([0-9]+)\..*$/\1/')
+              revision=$(echo "$dotnet_version" | sed -E 's/^[0-9]+\.[0-9]+\.[0-9]+\.([0-9]+)$/\1/')
+
+              if [ "$revision" -eq "0" ]; then
+                  semver_version="${major}.${minor}.${patch}"
+              else
+                  incremented_patch=$((patch + 1))
+                  semver_version="${major}.${minor}.${incremented_patch}-rev${revision}"
+              fi
+
+              if [ "$revision" != "0" ]; then
+                  display_version="${major}.${minor}.${patch}.${revision}"
+              elif [ "$patch" != "0" ]; then
+                  display_version="${major}.${minor}.${patch}"
+              else
+                  display_version="${major}.${minor}"
+              fi
+          else
+              semver_version="$dotnet_version"
+              display_version="$dotnet_version"
+          fi
+
+          echo "semver_version=$semver_version" >> $GITHUB_OUTPUT
+          echo "display_version=$display_version" >> $GITHUB_OUTPUT
+          echo "dotnet_version=$dotnet_version" >> $GITHUB_OUTPUT
+          echo "release_tag=v$dotnet_version" >> $GITHUB_OUTPUT
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          # Avalonia 12 needs a newer compiler than SDK 8 has; the 8 runtime runs the net8.0 app and tests.
+          dotnet-version: |
+            8.0.x
+            10.0.x
+        if: ${{ needs.get_latest_tag.outputs.latest_tag != steps.get_version.outputs.release_tag }}
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        if: ${{ needs.get_latest_tag.outputs.latest_tag != steps.get_version.outputs.release_tag }}
+
+      - name: Install AppImage build dependency
+        if: ${{ needs.get_latest_tag.outputs.latest_tag != steps.get_version.outputs.release_tag }}
+        run: sudo apt-get update && sudo apt-get install -y libfuse2
+
+      - name: Clone Database Repository
+        if: ${{ needs.get_latest_tag.outputs.latest_tag != steps.get_version.outputs.release_tag }}
+        run: git clone https://github.com/DS-Pokemon-Rom-Editor/scrcmd-database.git databases
+
+      - name: Clone ds-rom Repository
+        if: ${{ needs.get_latest_tag.outputs.latest_tag != steps.get_version.outputs.release_tag }}
+        run: git clone --depth 1 https://github.com/DS-Pokemon-Rom-Editor/ds-rom.git ds-rom
+
+      - name: Publish DSPRE.Avalonia (linux-x64)
+        if: ${{ needs.get_latest_tag.outputs.latest_tag != steps.get_version.outputs.release_tag }}
+        run: dotnet publish DSPRE.Avalonia/DSPRE.Avalonia.csproj -c Release -r linux-x64 --self-contained true -o publish-linux
+
+      - name: Build dsrom (Linux)
+        if: ${{ needs.get_latest_tag.outputs.latest_tag != steps.get_version.outputs.release_tag }}
+        run: |
+          cargo build --release -p ds-rom-cli --manifest-path ds-rom/Cargo.toml
+          mkdir -p publish-linux/Tools
+          cp ds-rom/target/release/dsrom publish-linux/Tools/dsrom
+          chmod +x publish-linux/Tools/dsrom
+
+      - name: Build apicula (Linux)
+        if: ${{ needs.get_latest_tag.outputs.latest_tag != steps.get_version.outputs.release_tag }}
+        uses: ./.github/actions/build-apicula
+        with:
+          output-directory: publish-linux/Tools
+
+      - name: Build rotom (Linux)
+        if: ${{ needs.get_latest_tag.outputs.latest_tag != steps.get_version.outputs.release_tag }}
+        uses: ./.github/actions/build-rotom
+        with:
+          output-directory: publish-linux/Tools
+
+      - name: Build chatot
+        if: ${{ needs.get_latest_tag.outputs.latest_tag != steps.get_version.outputs.release_tag }}
+        uses: ./.github/actions/build-chatot
+        with:
+          output-directory: publish-linux/Tools
+
+      # TODO: drop the remaining Linux tool binaries into publish-linux/Tools/ with these exact
+      # names (no extension): ndstool, blz.
+
+      - name: Bundle Databases
+        if: ${{ needs.get_latest_tag.outputs.latest_tag != steps.get_version.outputs.release_tag }}
+        run: |
+          mkdir -p publish-linux/databases
+          rsync -a --exclude='.git' --exclude='.github' --exclude='.gitmodules' databases/ publish-linux/databases/
+
+      - name: Create Velopack Release (Linux)
+        if: ${{ needs.get_latest_tag.outputs.latest_tag != steps.get_version.outputs.release_tag }}
+        run: |
+            dotnet tool install -g vpk --version 1.2.161
+            # Fetch previous linux-channel packages for delta generation (absent on the first Linux release).
+            vpk download github --repoUrl https://github.com/${{ github.repository }} --channel linux --token ${{ secrets.GH_TOKEN }} || true
+
+            vpk pack --packDir publish-linux --mainExe DSPRE.Avalonia -u DSPRE -v ${{ steps.get_version.outputs.semver_version }} --channel linux
+
+            # Attaches the AppImage + linux update feed to the same release the Windows job created.
+            vpk upload github --publish --repoUrl https://github.com/${{ github.repository }} --releaseName "DSPRE ${{ steps.get_version.outputs.display_version }}" --tag ${{ steps.get_version.outputs.release_tag }} --channel linux --token ${{ secrets.GH_TOKEN }}

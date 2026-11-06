@@ -1,0 +1,34 @@
+using Avalonia.Controls;
+using Avalonia.Markup.Xaml;
+using DSPRE.Avalonia.ViewModels;
+
+namespace DSPRE.Avalonia.Views.Tools
+{
+    public partial class OverlayEditorView : Window
+    {
+        private OverlayEditorViewModel VM => (OverlayEditorViewModel)DataContext;
+
+        public OverlayEditorView()
+        {
+            AvaloniaXamlLoader.Load(this);
+            OverlayEditorViewModel vm = new OverlayEditorViewModel();
+            DataContext = vm;
+            // The VM owns the bound Title; the chrome adds Ctrl+S and the close guard.
+            EditorWindowChrome.Attach(this, vm, title: () => vm.Title);
+        }
+
+        private async void Save_Click(object sender, global::Avalonia.Interactivity.RoutedEventArgs e)
+            => await VM.SaveChangesCoreAsync();
+
+        private void DecompressAll_Click(object sender, global::Avalonia.Interactivity.RoutedEventArgs e)
+            => VM.ToggleAllCompressed();
+
+        private void ToggleMarked_Click(object sender, global::Avalonia.Interactivity.RoutedEventArgs e)
+            => VM.ToggleAllMarked();
+
+        private async void Discard_Click(object sender, global::Avalonia.Interactivity.RoutedEventArgs e)
+        {
+            if (await DialogHelper.ConfirmDiscardAsync(this)) VM.DiscardChanges();
+        }
+    }
+}

@@ -1,0 +1,226 @@
+using DSPRE.Avalonia.Data;
+using System;
+using System.ComponentModel;
+using System.IO;
+using System.Runtime.CompilerServices;
+using AvaBitmap = Avalonia.Media.Imaging.Bitmap;
+
+namespace DSPRE.Avalonia.ViewModels.Graphics
+{
+    public class TrainerCardEditorViewModel : INotifyPropertyChanged, DSPRE.Editors.IEditorWithUnsavedChanges, ISupportsUndo
+    {
+        public event PropertyChangedEventHandler PropertyChanged;
+        private void OnPropertyChanged([CallerMemberName] string n = null)
+            => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(n));
+        private bool Set<T>(ref T f, T v, [CallerMemberName] string n = null)
+        { if (Equals(f, v)) return false; f = v; OnPropertyChanged(n); return true; }
+
+        private readonly TrainerCardGraphics _graphics = new();
+        public bool GraphicsAvailable => _graphics.Available;
+        public string[] RankNames => TrainerCardGraphics.RankNames;
+
+        /// <summary>One rank's box in the row that says which ranks an imported design colours.</summary>
+        public sealed class RankChoice : INotifyPropertyChanged
+        {
+            public event PropertyChangedEventHandler PropertyChanged;
+            public string Name { get; init; }
+            public int Index { get; init; }
+            private bool _isChecked;
+            public bool IsChecked
+            {
+                get => _isChecked;
+                set { if (_isChecked == value) return; _isChecked = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsChecked))); }
+            }
+        }
+
+        private System.Collections.ObjectModel.ObservableCollection<RankChoice> _importRanks;
+        public System.Collections.ObjectModel.ObservableCollection<RankChoice> ImportRanks => _importRanks ??=
+            new System.Collections.ObjectModel.ObservableCollection<RankChoice>(
+                System.Linq.Enumerable.Select(RankNames, (n, i) => new RankChoice { Name = n, Index = i, IsChecked = i == SelectedRankIndex }));
+
+        private int[] PickedRanks => System.Linq.Enumerable.ToArray(
+            System.Linq.Enumerable.Select(System.Linq.Enumerable.Where(ImportRanks, r => r.IsChecked), r => r.Index));
+
+        private int _selectedRankIndex;
+        public int SelectedRankIndex
+        {
+            get => _selectedRankIndex;
+            set
+            {
+                if (!Set(ref _selectedRankIndex, value)) return;
+                // An import goes to the rank being looked at unless more are ticked.
+                foreach (RankChoice r in ImportRanks) r.IsChecked = r.Index == value;
+                RefreshCardPreviews();
+            }
+        }
+
+        private AvaBitmap _cardFrontPreview, _cardBackPreview, _trainerMalePreview, _trainerFemalePreview;
+        public AvaBitmap CardFrontPreview { get => _cardFrontPreview; private set { if (Set(ref _cardFrontPreview, value)) OnPropertyChanged(nameof(PiecePreview)); } }
+        public AvaBitmap CardBackPreview { get => _cardBackPreview; private set { if (Set(ref _cardBackPreview, value)) OnPropertyChanged(nameof(PiecePreview)); } }
+        public AvaBitmap TrainerMalePreview { get => _trainerMalePreview; private set { if (Set(ref _trainerMalePreview, value)) OnPropertyChanged(nameof(PiecePreview)); } }
+        public AvaBitmap TrainerFemalePreview { get => _trainerFemalePreview; private set { if (Set(ref _trainerFemalePreview, value)) OnPropertyChanged(nameof(PiecePreview)); } }
+
+        /// <summary>The card's pieces, listed beside it.</summary>
+        public string[] Pieces { get; } = { "Card front", "Card back", "Colours", "Boy", "Girl" };
+
+        private int _pieceIndex;
+        public int PieceIndex
+        {
+            get => _pieceIndex;
+            set
+            {
+                if (value < 0 || !Set(ref _pieceIndex, value)) return;
+                OnPropertyChanged(nameof(PieceName)); OnPropertyChanged(nameof(PiecePreview));
+                OnPropertyChanged(nameof(PieceIsCard)); OnPropertyChanged(nameof(PieceIsColours)); OnPropertyChanged(nameof(PieceIsImage)); OnPropertyChanged(nameof(PieceIsPose));
+            }
+        }
+
+        public string PieceName => Pieces[_pieceIndex];
+        public bool PieceIsCard => _pieceIndex < 2;
+        public bool PieceIsColours => _pieceIndex == 2;
+        public bool PieceIsImage => _pieceIndex != 2;
+        public bool PieceIsPose => _pieceIndex > 2;
+        /// <summary>The colours show on the card's front.</summary>
+        public AvaBitmap PiecePreview => _pieceIndex switch
+        {
+            1 => CardBackPreview, 3 => TrainerMalePreview, 4 => TrainerFemalePreview, _ => CardFrontPreview,
+        };
+        public string ScreenCaption => RomInfo.GameFamily == RomInfo.GameFamilies.HGSS ? "Bottom screen" : "Top screen";
+
+        private string _statusText = string.Empty;
+        public string StatusText { get => _statusText; private set => Set(ref _statusText, value); }
+
+        public bool HasChanges => _graphics.HasChanges;
+
+        public TrainerCardEditorViewModel()
+        {
+            RefreshCardPreviews();
+            RefreshTrainerPreviews();
+            _graphics.Pending.Changed += () => { OnPropertyChanged(nameof(CanUndo)); OnPropertyChanged(nameof(CanRedo)); OnPropertyChanged(nameof(HasChanges)); OnPropertyChanged(nameof(HasUnsavedChanges)); };
+        }
+
+        public bool CanUndo => _graphics.Pending.CanUndo;
+        public bool CanRedo => _graphics.Pending.CanRedo;
+        public void Undo() { _graphics.Pending.Undo(); RefreshAll(); }
+        public void Redo() { _graphics.Pending.Redo(); RefreshAll(); }
+
+        // Each import is one pending step until Save.
+        private string Imported(Func<string> import)
+        {
+            string error = _graphics.Pending.Import(import);
+            if (error == null) RefreshAll();
+            return error;
+        }
+
+        private void RefreshCardPreviews()
+        {
+            if (!GraphicsAvailable)
+            {
+                CardFrontPreview = CardBackPreview = null;
+                StatusText = "Trainer card graphics aren't available for this ROM.";
+                OnPropertyChanged(nameof(HasChanges)); OnPropertyChanged(nameof(HasUnsavedChanges));
+                return;
+            }
+            RawImage front = _graphics.ComposeCardFront(SelectedRankIndex);
+            RawImage back = _graphics.ComposeCardBack(SelectedRankIndex);
+            CardFrontPreview = ImageConverter.ToAvaloniaBitmap(front);
+            CardBackPreview = ImageConverter.ToAvaloniaBitmap(back);
+            StatusText = (front == null || back == null) ? "Couldn't decode the current card design." : string.Empty;
+            OnPropertyChanged(nameof(HasChanges)); OnPropertyChanged(nameof(HasUnsavedChanges));
+        }
+
+        private void RefreshTrainerPreviews()
+        {
+            if (!GraphicsAvailable) { TrainerMalePreview = TrainerFemalePreview = null; return; }
+            TrainerMalePreview = ImageConverter.ToAvaloniaBitmap(_graphics.ComposeTrainer(male: true));
+            TrainerFemalePreview = ImageConverter.ToAvaloniaBitmap(_graphics.ComposeTrainer(male: false));
+        }
+
+        private void RefreshAll()
+        {
+            RefreshCardPreviews();
+            RefreshTrainerPreviews();
+        }
+
+        public string ImportCardFront(string pngPath)
+        {
+            RawImage raw = DecodePng(pngPath, out string err);
+            if (raw == null) return err;
+            return Imported(() => _graphics.ImportCardFront(raw, PickedRanks));
+        }
+
+        public string ImportCardBack(string pngPath)
+        {
+            RawImage raw = DecodePng(pngPath, out string err);
+            if (raw == null) return err;
+            return Imported(() => _graphics.ImportCardBack(raw, PickedRanks));
+        }
+
+        public string ImportTrainerMale(string pngPath)
+        {
+            RawImage raw = DecodePng(pngPath, out string err);
+            if (raw == null) return err;
+            return Imported(() => _graphics.ImportTrainerMale(raw));
+        }
+
+        public string ImportTrainerFemale(string pngPath)
+        {
+            RawImage raw = DecodePng(pngPath, out string err);
+            if (raw == null) return err;
+            return Imported(() => _graphics.ImportTrainerFemale(raw));
+        }
+
+        public string ExportCardFront(string pngPath) => SavePng(_graphics.ComposeCardFront(SelectedRankIndex), pngPath);
+        public string ExportCardBack(string pngPath) => SavePng(_graphics.ComposeCardBack(SelectedRankIndex), pngPath);
+        public string ExportTrainerMale(string pngPath) => SavePng(_graphics.ComposeTrainer(male: true), pngPath);
+        public string ExportTrainerFemale(string pngPath) => SavePng(_graphics.ComposeTrainer(male: false), pngPath);
+
+        public string ImportRankPalette(string nclrPath)
+        {
+            byte[] bytes;
+            try { bytes = System.IO.File.ReadAllBytes(nclrPath); }
+            catch (Exception ex) { return ex.Message; }
+            return Imported(() => _graphics.ImportRankPaletteRaw(SelectedRankIndex, bytes));
+        }
+
+        public string ExportRankPalette(string nclrPath)
+        {
+            byte[] bytes = _graphics.ExportRankPaletteRaw(SelectedRankIndex);
+            if (bytes == null) return "Couldn't read the current palette.";
+            try { PlainFiles.WriteBytes(nclrPath, bytes); return null; }
+            catch (Exception ex) { return ex.Message; }
+        }
+
+        // Imports land in the unpacked archive at once; Save keeps them, Discard or closing without saving puts the old bytes back.
+        public bool HasUnsavedChanges => HasChanges;
+        public string UnsavedChangesDescription => "Trainer card";
+        public void SaveChanges() { _graphics.AcceptAll(); OnPropertyChanged(nameof(HasChanges)); OnPropertyChanged(nameof(HasUnsavedChanges)); SaveNotice.Saved(UnsavedChangesDescription); }
+        public void DiscardChanges() => RevertChanges();
+
+        public void RevertChanges()
+        {
+            _graphics.RevertAll();
+            RefreshAll();
+        }
+
+        private static DSPRE.RawImage DecodePng(string path, out string error)
+        {
+            error = null;
+            try
+            {
+                using FileStream stream = System.IO.File.OpenRead(path);
+                RawImage raw = ImageConverter.DecodeRawImage(stream);
+                if (raw == null) error = "Couldn't read this PNG.";
+                return raw;
+            }
+            catch (Exception ex) { error = ex.Message; return null; }
+        }
+
+        private static string SavePng(DSPRE.RawImage raw, string path)
+        {
+            if (raw == null) return "Couldn't decode this image.";
+            try { ImageConverter.ToAvaloniaBitmap(raw).Save(path); return null; }
+            catch (Exception ex) { return ex.Message; }
+        }
+    }
+}

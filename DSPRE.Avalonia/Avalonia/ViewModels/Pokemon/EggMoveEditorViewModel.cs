@@ -1,0 +1,683 @@
+using System;
+using System.Collections.Generic;
+using System.Collections.ObjectModel;
+using System.ComponentModel;
+using System.IO;
+using System.Linq;
+using System.Runtime.CompilerServices;
+using System.Threading.Tasks;
+using Avalonia.Controls;
+using Avalonia.Media;
+using IEditorWithUnsavedChanges = global::DSPRE.Editors.IEditorWithUnsavedChanges;
+
+using DSPRE.Avalonia.Data;
+using DSPRE.Avalonia.Views.Shell;
+using DSPRE.Csv;
+namespace DSPRE.Avalonia.ViewModels.Pokemon
+{
+    public class EggMoveEditorViewModel : INotifyPropertyChanged, IEditorWithUnsavedChanges, DSPRE.Avalonia.ISupportsUndo, IDetachable
+    {
+        public event PropertyChangedEventHandler PropertyChanged;
+        private void OnPropertyChanged([CallerMemberName] string n = null)
+        {
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(n));
+        }
+
+        private bool Set<T>(ref T f, T v, [CallerMemberName] string n = null)
+        {
+            if (Equals(f, v)) return false; f = v; OnPropertyChanged(n); return true;
+        }
+
+        // ----------------------------------------------------------------
+        // Constants
+        // ----------------------------------------------------------------
+
+
+        // ----------------------------------------------------------------
+        // IEditorWithUnsavedChanges
+        // ----------------------------------------------------------------
+
+        private bool _dirty;
+        public bool HasUnsavedChanges => _dirty;
+        public string UnsavedChangesDescription => "Egg moves";
+        void IEditorWithUnsavedChanges.SaveChanges() => DialogHelper.Watch(SaveCommandAsync());
+        async Task<bool> IEditorWithUnsavedChanges.SaveChangesAsync()
+        {
+            await SaveCommandAsync();
+            return !HasUnsavedChanges;
+        }
+        public void DiscardChanges()
+        {
+            if (!_dirty) return;
+            // Every edit works on _eggMoveData in place, so read the table again.
+            int keep = _selectedMonIndex;
+            _eggMoveData = new List<EggMoveEntry>();
+            PopulateEggMoveData();
+            RefreshMonList();
+            UpdateEntryCountLabel();
+            UpdateListSizeLabel();
+            _selectedMonIndex = -1;
+            OnPropertyChanged(nameof(SelectedMonIndex));
+            int target = Math.Min(keep, _eggMoveData.Count - 1);
+            if (target >= 0) SelectedMonIndex = target; else OnMonSelected(-1);
+            SetDirty(false);
+            ResetUndo();
+        }
+
+        // ----------------------------------------------------------------
+        // Undo / redo: the whole table
+        // ----------------------------------------------------------------
+
+        private DSPRE.Avalonia.ByteStateUndo _undo;
+        public bool CanUndo => _undo?.CanUndo == true;
+        public bool CanRedo => _undo?.CanRedo == true;
+        public void Undo() => _undo?.Undo();
+        public void Redo() => _undo?.Redo();
+        private void RaiseUndo() { OnPropertyChanged(nameof(CanUndo)); OnPropertyChanged(nameof(CanRedo)); }
+
+        private byte[] TakeState() => DSPRE.Avalonia.UndoJson.Take(
+            _eggMoveData.Select(en => new[] { en.SpeciesID }.Concat(en.MoveIDs.Select(m => (int)m)).ToArray()).ToArray());
+
+        private void ApplyState(byte[] state)
+        {
+            int[][] rows = DSPRE.Avalonia.UndoJson.Read<int[][]>(state);
+            int keep = _selectedMonIndex;
+            _eggMoveData = rows.Select(r => new EggMoveEntry(r[0], r.Skip(1).Select(m => (ushort)m).ToList())).ToList();
+            RefreshMonList();
+            UpdateEntryCountLabel();
+            UpdateListSizeLabel();
+            _selectedMonIndex = -1;
+            OnPropertyChanged(nameof(SelectedMonIndex));
+            int target = Math.Min(keep, _eggMoveData.Count - 1);
+            if (target >= 0) SelectedMonIndex = target; else OnMonSelected(-1);
+            SetDirty(_undo.IsDirty);
+        }
+
+        private void ResetUndo() { _undo = new DSPRE.Avalonia.ByteStateUndo(TakeState, ApplyState, RaiseUndo); RaiseUndo(); }
+
+        // ----------------------------------------------------------------
+        // ROM data
+        // ----------------------------------------------------------------
+
+        private readonly string[] _monNames;
+        private readonly string[] _moveNames;
+        private List<EggMoveEntry> _eggMoveData = new();
+        private bool _useSpecialFormat;
+        private int _maxTableSize;
+        private int _maxEggMoves = 16;
+
+        // ----------------------------------------------------------------
+        // Observable state
+        // ----------------------------------------------------------------
+
+        private string _title = "Egg move editor";
+        public string Title { get => _title; private set => Set(ref _title, value); }
+
+        public ObservableCollection<string> MonList    { get; } = new();
+        public ObservableCollection<EggMoveRow> MoveList { get; } = new();
+        public sealed class EggMoveRow { public int Move { get; init; } public string Name { get; init; } public override string ToString() => Name; }
+        public ObservableCollection<string> MonNames   { get; } = new();
+        public ObservableCollection<string> MoveNames  { get; } = new();
+        public ObservableCollection<string> SearchResults { get; } = new();
+
+        // ---- Selected Pokémon entry ----
+        private int _selectedMonIndex = -1;
+        public int SelectedMonIndex
+        {
+            get => _selectedMonIndex;
+            set
+            {
+                if (!Set(ref _selectedMonIndex, value)) return;
+                OnMonSelected(value);
+            }
+        }
+
+        // ---- Selected move ----
+        private int _selectedMoveIndex = -1;
+        public int SelectedMoveIndex
+        {
+            get => _selectedMoveIndex;
+            set
+            {
+                if (!Set(ref _selectedMoveIndex, value)) return;
+                OnMoveSelected(value);
+            }
+        }
+
+        // ---- ComboBox selections (Add/Replace pickers) ----
+        private int _cbMonIndex = -1;
+        public int CbMonIndex
+        {
+            get => _cbMonIndex;
+            set { if (Set(ref _cbMonIndex, value)) UpdateMonStatus(); }
+        }
+
+        private int _cbMoveIndex = -1;
+        public int CbMoveIndex
+        {
+            get => _cbMoveIndex;
+            set { if (Set(ref _cbMoveIndex, value)) UpdateMoveStatus(); }
+        }
+
+        private int _cbReplaceeIndex = -1;
+        public int CbReplaceeIndex { get => _cbReplaceeIndex; set => Set(ref _cbReplaceeIndex, value); }
+
+        private int _cbReplacerIndex = -1;
+        public int CbReplacerIndex { get => _cbReplacerIndex; set => Set(ref _cbReplacerIndex, value); }
+
+        private int _cbDeleteAllIndex = -1;
+        public int CbDeleteAllIndex { get => _cbDeleteAllIndex; set => Set(ref _cbDeleteAllIndex, value); }
+
+        // ---- Status / labels ----
+        private string _monStatusText = string.Empty;
+        public string MonStatusText { get => _monStatusText; private set => Set(ref _monStatusText, value); }
+
+        private string _moveStatusText = string.Empty;
+        public string MoveStatusText { get => _moveStatusText; private set => Set(ref _moveStatusText, value); }
+
+        public string MoveButtonsHelp => CbMoveIndex < 0 ? "Pick a move first" : null;
+
+        private string _monCountText = string.Empty;
+        public string MonCountText { get => _monCountText; private set => Set(ref _monCountText, value); }
+
+        private string _moveCountText = string.Empty;
+        public string MoveCountText { get => _moveCountText; private set => Set(ref _moveCountText, value); }
+
+        private IBrush _moveCountBrush = Brushes.Transparent;
+        public IBrush MoveCountBrush { get => _moveCountBrush; private set => Set(ref _moveCountBrush, value); }
+
+        private string _listSizeText = string.Empty;
+        public string ListSizeText { get => _listSizeText; private set => Set(ref _listSizeText, value); }
+
+        private IBrush _listSizeBrush = Brushes.Transparent;
+        public IBrush ListSizeBrush { get => _listSizeBrush; private set => Set(ref _listSizeBrush, value); }
+
+        private string _entryIdText = string.Empty;
+        public string EntryIdText { get => _entryIdText; private set => Set(ref _entryIdText, value); }
+
+        private string _moveIdText = string.Empty;
+        public string MoveIdText { get => _moveIdText; private set => Set(ref _moveIdText, value); }
+
+        // ---- Button enables ----
+        public bool CanAddMon     => CbMonIndex >= 0 && !_eggMoveData.Any(e => e.SpeciesID == CbMonIndex);
+        public bool CanReplaceMon => CanAddMon && _selectedMonIndex >= 0;
+        public bool CanDeleteMon  => _selectedMonIndex >= 0 && _selectedMonIndex < _eggMoveData.Count;
+        public bool CanAddMove    => CbMoveIndex >= 0 && _selectedMonIndex >= 0 && _selectedMonIndex < _eggMoveData.Count
+                                     && !_eggMoveData[_selectedMonIndex].MoveIDs.Contains((ushort)CbMoveIndex);
+        public bool CanReplaceMove => CanAddMove && _selectedMoveIndex >= 0;
+        public bool CanDeleteMove  => _selectedMonIndex >= 0 && _selectedMoveIndex >= 0
+                                      && _selectedMoveIndex < _eggMoveData[_selectedMonIndex].MoveIDs.Count;
+
+        // ---- Search ----
+        private string _searchText = string.Empty;
+        public string SearchText { get => _searchText; set => Set(ref _searchText, value); }
+
+        private int _selectedSearchIndex = -1;
+        public int SelectedSearchIndex { get => _selectedSearchIndex; set => Set(ref _selectedSearchIndex, value); }
+
+        // ----------------------------------------------------------------
+        // Constructor
+        // ----------------------------------------------------------------
+
+        public EggMoveEditorViewModel()
+        {
+            if (Design.IsDesignMode)
+            {
+                // Create dummy name arrays (so MonLabel and MoveLabel don't crash)
+                _monNames = Enumerable.Range(0, 30).Select(i => $"Dummy Pokémon {i}").ToArray();
+                _moveNames = Enumerable.Range(0, 50).Select(i => $"Dummy Move {i}").ToArray();
+
+                // Add dummy entries to _eggMoveData
+                _eggMoveData = new List<EggMoveEntry>
+                {
+                    new EggMoveEntry(0, new List<ushort> { 1, 2, 3 }),
+                    new EggMoveEntry(1, new List<ushort> { 4, 5 })
+                };
+
+                // Populate observable collections
+                foreach (string n in _monNames) MonNames.Add(n);
+                foreach (string n in _moveNames) MoveNames.Add(n);
+
+                RefreshMonList();      // Uses _monNames and _eggMoveData
+                RefreshMoveList(0);    // Populates MoveList for first entry
+
+                UpdateEntryCountLabel();
+                UpdateListSizeLabel();
+                SetDirty(false);
+                return;
+            }
+            _monNames  = RomInfo.GetPokemonNames();
+            _moveNames = RomInfo.GetAttackNames();
+
+            foreach (string n in _monNames)  MonNames.Add(n);
+            foreach (string n in _moveNames) MoveNames.Add(n);
+            AppEvents.NamesChanged += OnNamesChanged;   // live-refresh names from the Text editor
+
+            PopulateEggMoveData();
+            RefreshMonList();
+            UpdateEntryCountLabel();
+            UpdateListSizeLabel();
+
+            // Start on the first Pokémon so the moves list isn't empty.
+            if (MonList.Count > 0) SelectedMonIndex = 0;
+            ResetUndo();
+        }
+
+        private void OnNamesChanged(object sender, System.EventArgs e)
+        {
+            DSPRE.Avalonia.Data.ListSync.Apply(MonNames,  RomInfo.GetPokemonNames());
+            DSPRE.Avalonia.Data.ListSync.Apply(MoveNames, RomInfo.GetAttackNames());
+        }
+        /// <summary>Unsubscribes from app-wide events; call when the editor window closes.</summary>
+        public void Detach() => AppEvents.NamesChanged -= OnNamesChanged;
+
+        // ----------------------------------------------------------------
+        // Commands (called from code-behind)
+        // ----------------------------------------------------------------
+
+        public async Task SaveCommandAsync()
+        {
+            int used = UsedSize;
+            if (!_useSpecialFormat && used > _maxTableSize)
+            {
+                await DialogHelper.ShowErrorAsync(
+                    $"Nothing was saved: the egg move table uses {used} of {_maxTableSize} bytes. Remove some moves or Pokémon first.",
+                    "Egg move editor");
+                return;
+            }
+
+            foreach (EggMoveEntry entry in _eggMoveData)
+            {
+                if (entry.MoveIDs.Count > _maxEggMoves)
+                {
+                    string monName = entry.SpeciesID < _monNames.Length ? _monNames[entry.SpeciesID] : $"SPECIES_{entry.SpeciesID}";
+                    await DialogHelper.ShowInfoAsync(
+                        $"{monName} has more than {_maxEggMoves} egg moves, the most the game allows.",
+                        "Warning");
+                }
+            }
+
+            string error = SaveEggMoveData();
+            if (error != null)
+            {
+                await DialogHelper.ShowErrorAsync("The egg moves weren't saved:\n" + error, "Egg move editor");
+                return;
+            }
+            SaveNotice.Saved(UnsavedChangesDescription);
+        }
+
+        public void AddMonCommand()
+        {
+            if (CbMonIndex < 0) return;
+            EggMoveEntry entry = new EggMoveEntry(CbMonIndex, new List<ushort>());
+            _eggMoveData.Add(entry);
+            MonList.Add(MonLabel(CbMonIndex));
+            SelectedMonIndex = _eggMoveData.Count - 1;
+            UpdateEntryCountLabel();
+            UpdateListSizeLabel();
+            SetDirty(true);
+        }
+
+        public void ReplaceMonCommand()
+        {
+            if (CbMonIndex < 0 || _selectedMonIndex < 0) return;
+            EggMoveEntry entry = _eggMoveData[_selectedMonIndex];
+            entry.SpeciesID = CbMonIndex;
+            _eggMoveData[_selectedMonIndex] = entry;
+            MonList[_selectedMonIndex] = MonLabel(CbMonIndex);
+            SetDirty(true);
+        }
+
+        public void DeleteMonCommand()
+        {
+            if (_selectedMonIndex < 0 || _selectedMonIndex >= _eggMoveData.Count) return;
+            _eggMoveData.RemoveAt(_selectedMonIndex);
+            MonList.RemoveAt(_selectedMonIndex);
+            SelectedMonIndex = Math.Min(_selectedMonIndex, _eggMoveData.Count - 1);
+            UpdateEntryCountLabel();
+            UpdateListSizeLabel();
+            SetDirty(true);
+        }
+
+        public void AddMoveCommand()
+        {
+            if (CbMoveIndex < 0 || _selectedMonIndex < 0) return;
+            EggMoveEntry entry = _eggMoveData[_selectedMonIndex];
+            entry.MoveIDs.Add((ushort)CbMoveIndex);
+            _eggMoveData[_selectedMonIndex] = entry;
+            MoveList.Add(Row((ushort)CbMoveIndex));
+            SelectedMoveIndex = entry.MoveIDs.Count - 1;
+            UpdateMoveCountLabel();
+            UpdateListSizeLabel();
+            SetDirty(true);
+        }
+
+        public void ReplaceMoveCommand()
+        {
+            if (CbMoveIndex < 0 || _selectedMonIndex < 0 || _selectedMoveIndex < 0) return;
+            EggMoveEntry entry = _eggMoveData[_selectedMonIndex];
+            entry.MoveIDs[_selectedMoveIndex] = (ushort)CbMoveIndex;
+            _eggMoveData[_selectedMonIndex] = entry;
+            MoveList[_selectedMoveIndex] = Row((ushort)CbMoveIndex);
+            SetDirty(true);
+        }
+
+        public void DeleteMoveCommand()
+        {
+            if (_selectedMonIndex < 0 || _selectedMoveIndex < 0) return;
+            EggMoveEntry entry = _eggMoveData[_selectedMonIndex];
+            entry.MoveIDs.RemoveAt(_selectedMoveIndex);
+            _eggMoveData[_selectedMonIndex] = entry;
+            MoveList.RemoveAt(_selectedMoveIndex);
+            SelectedMoveIndex = Math.Min(_selectedMoveIndex, entry.MoveIDs.Count - 1);
+            UpdateMoveCountLabel();
+            UpdateListSizeLabel();
+            SetDirty(true);
+        }
+
+        public async Task BulkReplaceCommandAsync()
+        {
+            if (CbReplaceeIndex < 0 || CbReplacerIndex < 0)
+            {
+                await DialogHelper.ShowErrorAsync("Pick the move to replace and the one to put in.", "Egg move editor");
+                return;
+            }
+            ushort from = (ushort)CbReplaceeIndex, to = (ushort)CbReplacerIndex;
+            int count = 0; List<string> affected = new List<string>();
+            foreach (EggMoveEntry entry in _eggMoveData)
+            {
+                for (int i = 0; i < entry.MoveIDs.Count; i++)
+                {
+                    if (entry.MoveIDs[i] != from) continue;
+                    entry.MoveIDs[i] = to; count++;
+                    affected.Add(entry.SpeciesID < _monNames.Length ? _monNames[entry.SpeciesID] : $"SPECIES_{entry.SpeciesID}");
+                }
+            }
+            if (count > 0)
+            {
+                RefreshMoveList(_selectedMonIndex);
+                SetDirty(true);
+                await DialogHelper.ShowInfoAsync($"Replaced {_moveNames[from]} with {_moveNames[to]} {Plural.Of(count, "time")}.\nAffected: {string.Join(", ", affected)}", "Bulk replace");
+            }
+            else
+                await DialogHelper.ShowInfoAsync($"No occurrences of {_moveNames[from]} were found.", "Bulk replace");
+        }
+
+        public async Task BulkDeleteCommandAsync()
+        {
+            if (CbDeleteAllIndex < 0)
+            {
+                await DialogHelper.ShowErrorAsync("Pick the move to delete.", "Egg move editor");
+                return;
+            }
+            ushort del = (ushort)CbDeleteAllIndex;
+            int count = 0; List<string> affected = new List<string>();
+            foreach (EggMoveEntry entry in _eggMoveData)
+            {
+                int before = entry.MoveIDs.Count;
+                entry.MoveIDs.RemoveAll(m => m == del);
+                int diff = before - entry.MoveIDs.Count;
+                if (diff <= 0) continue;
+                count += diff;
+                affected.Add(entry.SpeciesID < _monNames.Length ? _monNames[entry.SpeciesID] : $"SPECIES_{entry.SpeciesID}");
+            }
+            if (count > 0)
+            {
+                RefreshMoveList(_selectedMonIndex);
+                UpdateMoveCountLabel();
+                UpdateListSizeLabel();
+                SetDirty(true);
+                await DialogHelper.ShowInfoAsync($"Deleted {_moveNames[del]} {Plural.Of(count, "time")}.\nAffected: {string.Join(", ", affected)}", "Bulk delete");
+            }
+            else
+                await DialogHelper.ShowInfoAsync($"No occurrences of {_moveNames[del]} were found.", "Bulk delete");
+        }
+
+        public void SearchMonCommand()
+        {
+            SearchResults.Clear();
+            if (string.IsNullOrWhiteSpace(SearchText)) return;
+            string lower = SearchText.Trim().ToLower();
+            foreach (EggMoveEntry entry in _eggMoveData)
+            {
+                string name = entry.SpeciesID < _monNames.Length ? _monNames[entry.SpeciesID] : $"SPECIES_{entry.SpeciesID}";
+                if (name.ToLower().Contains(lower)) SearchResults.Add(name);
+            }
+        }
+
+        public void JumpToSearchResult()
+        {
+            if (SelectedSearchIndex < 0 || SelectedSearchIndex >= SearchResults.Count) return;
+            string target = SearchResults[SelectedSearchIndex];
+            for (int i = 0; i < MonList.Count; i++)
+            {
+                if (MonList[i] == target) { SelectedMonIndex = i; return; }
+            }
+        }
+
+        public async Task ExportCommandAsync(Window owner)
+        {
+            string path = await DialogHelper.SaveFileAsync(owner, "Export egg move data",
+                new[] { DialogHelper.CsvFilter, DialogHelper.AllFilter }, "egg_moves.csv");
+            if (path == null) return;
+            bool ok = EggMoveCsv.Export(_eggMoveData, path, _monNames, _moveNames);
+            if (ok) SaveNotice.Exported(path);
+            else await DialogHelper.ShowErrorAsync("The egg moves couldn't be exported. The log has the reason.", "Egg move editor");
+        }
+
+        public async Task ImportCommandAsync(Window owner)
+        {
+            string path = await DialogHelper.OpenFileAsync(owner, "Import egg move data",
+                new[] { DialogHelper.CsvFilter, DialogHelper.AllFilter });
+            if (path == null) return;
+            EggMoveTableCsv importer = new EggMoveTableCsv(_monNames, _moveNames, _eggMoveData);
+            CsvImportSession session = await CsvImportReviewView.ReviewAsync(owner, CsvImportSession.Open(importer, path));
+            if (session == null) return;
+            _eggMoveData = importer.Result(session.Accepted);
+            int keep = _selectedMonIndex;
+            RefreshMonList();
+            UpdateEntryCountLabel();
+            UpdateListSizeLabel();
+            // Clearing the list drops the selection, so the Pokémon on screen is picked again to show its new moves.
+            _selectedMonIndex = -1;
+            OnPropertyChanged(nameof(SelectedMonIndex));
+            int target = Math.Min(keep, _eggMoveData.Count - 1);
+            if (target >= 0) SelectedMonIndex = target; else OnMonSelected(-1);
+            SetDirty(true);
+            SaveNotice.Imported("egg moves", path);
+        }
+
+
+
+        // ----------------------------------------------------------------
+        // Private helpers
+        // ----------------------------------------------------------------
+
+        private int TotalSize
+        {
+            get
+            {
+                int s = 2; // end marker
+                foreach (EggMoveEntry e in _eggMoveData) s += e.GetSizeInBytes();
+                return s;
+            }
+        }
+
+        /// <summary>The bytes counted against <see cref="_maxTableSize"/>: the whole table, or on HGSS only up
+        /// to the last Pokémon header, since the game searches a fixed number of entries for it.</summary>
+        private int UsedSize
+        {
+            get
+            {
+                if (!RomInfo.EggMoveLimitCountsHeadersOnly) return TotalSize;
+                if (_eggMoveData.Count == 0) return 0;
+                int s = 2; // the last header
+                for (int i = 0; i < _eggMoveData.Count - 1; i++) s += _eggMoveData[i].GetSizeInBytes();
+                return s;
+            }
+        }
+
+        private void OnMonSelected(int idx)
+        {
+            if (idx < 0 || idx >= _eggMoveData.Count)
+            {
+                MoveList.Clear();
+                RefreshButtonEnables();
+                return;
+            }
+            CbMonIndex = _eggMoveData[idx].SpeciesID;
+            RefreshMoveList(idx);
+            UpdateMonStatus();
+            UpdateMoveStatus();
+            UpdateMoveCountLabel();
+            EntryIdText = $"Entry {idx}";
+            RefreshButtonEnables();
+        }
+
+        private void OnMoveSelected(int idx)
+        {
+            if (_selectedMonIndex < 0 || idx < 0 || idx >= _eggMoveData[_selectedMonIndex].MoveIDs.Count)
+            {
+                RefreshButtonEnables();
+                return;
+            }
+            CbMoveIndex = _eggMoveData[_selectedMonIndex].MoveIDs[idx];
+            UpdateMoveStatus();
+            MoveIdText = $"Move index: {idx}";
+            RefreshButtonEnables();
+        }
+
+        private void RefreshMonList()
+        {
+            MonList.Clear();
+            foreach (EggMoveEntry e in _eggMoveData) MonList.Add(MonLabel(e.SpeciesID));
+        }
+
+        private void RefreshMoveList(int monIdx)
+        {
+            MoveList.Clear();
+            if (monIdx < 0 || monIdx >= _eggMoveData.Count) return;
+            foreach (ushort id in _eggMoveData[monIdx].MoveIDs) MoveList.Add(Row(id));
+        }
+
+        private string MonLabel(int id)  => id >= 0 && id < _monNames.Length  ? _monNames[id]  : $"SPECIES_{id}";
+        private string MoveLabel(ushort id) => id < _moveNames.Length ? _moveNames[id] : $"MOVE_{id}";
+        private EggMoveRow Row(ushort id) => new EggMoveRow { Move = id, Name = MoveLabel(id) };
+
+        private void UpdateMonStatus()
+        {
+            OnPropertyChanged(nameof(CanAddMon));
+            OnPropertyChanged(nameof(CanReplaceMon));
+            MonStatusText = CbMonIndex >= 0 && _eggMoveData.Any(e => e.SpeciesID == CbMonIndex) ? "This Pokémon already has egg moves." : "";
+        }
+
+        private void UpdateMoveStatus()
+        {
+            OnPropertyChanged(nameof(CanAddMove));
+            OnPropertyChanged(nameof(CanReplaceMove));
+            OnPropertyChanged(nameof(MoveButtonsHelp));
+            if (CbMoveIndex < 0) { MoveStatusText = ""; return; }
+            if (_selectedMonIndex < 0) { MoveStatusText = "No Pokémon selected."; return; }
+            ushort id = (ushort)CbMoveIndex;
+            MoveStatusText = _eggMoveData[_selectedMonIndex].MoveIDs.Contains(id)
+                ? "Egg move already in list." : "Egg move can be added.";
+        }
+
+        private void UpdateEntryCountLabel() => MonCountText = $"{_eggMoveData.Count} Pokémon";
+
+        private void UpdateMoveCountLabel()
+        {
+            if (_selectedMonIndex < 0 || _selectedMonIndex >= _eggMoveData.Count)
+            {
+                MoveCountText = "Moves: -";
+                MoveCountBrush = Brushes.Transparent;
+                return;
+            }
+            int cnt = _eggMoveData[_selectedMonIndex].MoveIDs.Count;
+            MoveCountText = $"Moves: {cnt}";
+            MoveCountBrush = cnt > _maxEggMoves ? StatusBrushes.Bad : cnt == _maxEggMoves ? StatusBrushes.Warn : StatusBrushes.None;
+        }
+
+        private void UpdateListSizeLabel()
+        {
+            if (_useSpecialFormat)
+            {
+                ListSizeText  = "List size: special format";
+                ListSizeBrush = StatusBrushes.Good;
+                return;
+            }
+            int total = UsedSize;
+            ListSizeText  = $"List size: {total} / {_maxTableSize} bytes";
+            ListSizeBrush = total > _maxTableSize ? StatusBrushes.Bad : total == _maxTableSize ? StatusBrushes.Warn : StatusBrushes.None;
+        }
+
+        private void RefreshButtonEnables()
+        {
+            OnPropertyChanged(nameof(CanAddMon));
+            OnPropertyChanged(nameof(CanReplaceMon));
+            OnPropertyChanged(nameof(CanDeleteMon));
+            OnPropertyChanged(nameof(CanAddMove));
+            OnPropertyChanged(nameof(CanReplaceMove));
+            OnPropertyChanged(nameof(CanDeleteMove));
+        }
+
+        private void SetDirty(bool d)
+        {
+            // An edit is a step; undoing back to the saved table is clean again.
+            if (d && _undo != null) { _undo.Record(); d = _undo.IsDirty; }
+            _dirty = d;
+            OnPropertyChanged(nameof(HasUnsavedChanges));
+        }
+
+        // ---- ROM I/O ----
+
+        private void PopulateEggMoveData()
+        {
+            try
+            {
+                (bool expanded, int maxMoves) = EggMoveData.Layout();
+                _useSpecialFormat = expanded;
+                if (expanded) _maxEggMoves = maxMoves;
+                _maxTableSize = expanded ? ushort.MaxValue : RomInfo.GetEggMoveTableMaxBytes();
+                _eggMoveData.AddRange(EggMoveData.ReadFromRom());
+            }
+            catch (Exception ex)
+            {
+                // An empty table saved back would wipe every list, so a failed read blocks saving.
+                _loadError = ex.Message;
+                AppLogger.Error($"Couldn't populate egg move data: {ex.Message}");
+            }
+        }
+
+        private string _loadError;
+
+        /// <summary>Writes the table; returns why it couldn't, or null.</summary>
+        private string SaveEggMoveData()
+        {
+            if (_loadError != null) return "The egg moves couldn't be read, so saving would replace them: " + _loadError;
+            try
+            {
+                EggMoveData.Write(_eggMoveData, _useSpecialFormat, _monNames.Length);
+                _undo?.MarkSaved();
+                SetDirty(false);
+                return null;
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+            {
+                AppLogger.Error($"Couldn't save egg move data: {ex.Message}");
+                return ex.Message;
+            }
+        }
+
+        // ----------------------------------------------------------------
+        // Static ROM read (for DocTool / other non-UI callers)
+        // ----------------------------------------------------------------
+
+        /// <summary>
+        /// Reads egg move data directly from the ROM without creating a full ViewModel instance.
+        /// Safe to call from any non-UI context once a ROM is loaded.
+        /// </summary>
+        // Moved to the core EggMoveData class (DocTool needs it too); kept as a forwarder.
+        public static List<EggMoveEntry> ReadFromRom() => EggMoveData.ReadFromRom();
+    }
+}

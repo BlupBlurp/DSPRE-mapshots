@@ -1,0 +1,134 @@
+using System;
+using System.Net.Http;
+using System.Text.Json;
+using System.Threading.Tasks;
+using Avalonia.Controls;
+using Velopack;
+using Velopack.Sources;
+
+namespace DSPRE.Avalonia
+{
+    /// <summary>The Velopack update check, used as <see cref="ShellIntegration.CheckForUpdatesHook"/> when no host sets one.</summary>
+    public static class AppUpdater
+    {
+        private const string RepoUrl = "https://github.com/DS-Pokemon-Rom-Editor/DSPRE";
+
+        public static void CheckForUpdates(bool silent) => _ = CheckForUpdatesAsync(silent);
+
+        private static async Task CheckForUpdatesAsync(bool silent)
+        {
+            AppLogger.Info("Checking for updates...");
+            try
+            {
+                UpdateManager mgr = new UpdateManager(new GithubSource(RepoUrl, "", prerelease: false));
+
+                if (!mgr.IsInstalled)
+                {
+                    AppLogger.Info("Not a Velopack-installed build; skipping update check.");
+                    if (!silent)
+                        await DialogHelper.ShowInfoAsync("Update checks only work in an installed copy of DSPRE.", "Check for updates");
+                    return;
+                }
+
+                UpdateInfo newVersion = await Task.Run(() => mgr.CheckForUpdates());
+                if (newVersion == null)
+                {
+                    AppLogger.Info("No updates available.");
+                    if (!silent)
+                        await DialogHelper.ShowInfoAsync("DSPRE is up to date.", "Check for updates");
+                    return;
+                }
+
+                string currentVersion = AppInfo.GetDSPREVersion();
+                string velopackVersion = newVersion.TargetFullRelease.Version.ToString();
+                string availableVersion = ToDotNetVersion(velopackVersion);
+
+                string notes = await Task.Run(() => FetchReleaseNotes($"v{availableVersion}"));
+                bool install = await ShowUpdatePromptAsync(currentVersion, availableVersion, notes);
+
+                if (install)
+                {
+                    AppLogger.Info($"Downloading and installing update {availableVersion}...");
+                    await Task.Run(() =>
+                    {
+                        mgr.DownloadUpdates(newVersion);
+                        mgr.ApplyUpdatesAndRestart(newVersion);
+                    });
+                }
+                else
+                {
+                    AppLogger.Info("User declined to update the application.");
+                }
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Error($"Error checking for updates: {ex.Message}");
+                if (!silent)
+                    await DialogHelper.ShowErrorAsync($"Error checking for updates: {ex.Message}", "Update error");
+            }
+        }
+
+        /// <summary>Shows the prompt with the release notes. Public so the dev preview can reuse it.</summary>
+        public static async Task<bool> ShowUpdatePromptAsync(string currentVersion, string availableVersion, string notes, bool preview = false)
+        {
+            Window owner = (global::Avalonia.Application.Current?.ApplicationLifetime
+                as global::Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime)?.MainWindow;
+            UpdateAvailableWindow dlg = new Views.Shell.UpdateAvailableWindow(currentVersion, availableVersion, notes, preview);
+            if (owner != null) await dlg.ShowDialog(owner);
+            else dlg.Show();
+            return dlg.Install;
+        }
+
+        // Velopack strips trailing zero parts and turns a revision into "-revN"; the release tag keeps the
+        // original 4-part AssemblyVersion, so it has to be rebuilt before the notes can be looked up.
+        private static string ToDotNetVersion(string velopackVersion)
+        {
+            try
+            {
+                if (velopackVersion.Contains("-rev"))
+                {
+                    string[] parts = velopackVersion.Split('-');
+                    string[] nums = parts[0].Split('.');
+                    int revision = int.Parse(parts[1].Replace("rev", ""));
+                    int patch = int.Parse(nums[2]) - 1;
+                    return $"{nums[0]}.{nums[1]}.{patch}.{revision}";
+                }
+                string[] v = velopackVersion.Split('.');
+                return v.Length >= 3 ? $"{v[0]}.{v[1]}.{v[2]}.0" : velopackVersion;
+            }
+            catch (Exception ex) { AppLogger.WarnOnce("AppUpdater.ToDotNetVersion", ex); return velopackVersion; }
+        }
+
+        /// <summary>Reads a release's notes off GitHub. Returns null when there are none to show.</summary>
+        private static string FetchReleaseNotes(string tag)
+        {
+            try
+            {
+                using HttpClient client = new System.Net.Http.HttpClient();
+                client.DefaultRequestHeaders.Add("User-Agent", "DSPRE");
+                client.DefaultRequestHeaders.Add("Accept", "application/vnd.github.v3+json");
+
+                HttpResponseMessage response = client.GetAsync(
+                    $"https://api.github.com/repos/DS-Pokemon-Rom-Editor/DSPRE/releases/tags/{tag}").Result;
+                if (!response.IsSuccessStatusCode)
+                {
+                    AppLogger.Warn($"Release notes for '{tag}' returned {(int)response.StatusCode}.");
+                    return null;
+                }
+
+                using JsonDocument doc = System.Text.Json.JsonDocument.Parse(response.Content.ReadAsStringAsync().Result);
+                if (doc.RootElement.TryGetProperty("body", out JsonElement body) &&
+                    body.ValueKind == System.Text.Json.JsonValueKind.String)
+                {
+                    string text = body.GetString();
+                    return string.IsNullOrWhiteSpace(text) ? null : text;
+                }
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Warn("Couldn't fetch release notes: " + ex.Message);
+            }
+            return null;
+        }
+    }
+}

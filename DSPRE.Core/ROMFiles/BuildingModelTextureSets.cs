@@ -1,0 +1,110 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using static DSPRE.RomInfo;
+
+namespace DSPRE.ROMFiles
+{
+    /// <summary>One building texture set, the model ids it contains pictures for, and the areas that use it.</summary>
+    public sealed class BuildingModelTextureSet
+    {
+        public int TextureSetId { get; init; }
+        public bool Indoor { get; init; }
+        public IReadOnlyList<int> ModelIds { get; init; }
+        public IReadOnlyList<int> AreaIds { get; init; }
+    }
+
+    /// <summary>
+    /// Reads the ROM's area and area-build tables. The texture pack and area-build entry share an id;
+    /// the latter starts with a 16-bit count followed by that many 16-bit building model ids.
+    /// </summary>
+    public static class BuildingModelTextureSets
+    {
+        public static IReadOnlyList<int> ParseModelIds(ReadOnlySpan<byte> data)
+        {
+            if (data.Length < 2) throw new InvalidDataException("The building model list has no count.");
+            int count = data[0] | data[1] << 8;
+            int required = 2 + count * 2;
+            if (required > data.Length)
+                throw new InvalidDataException($"The building model list says it has {count} entries, but only {data.Length} bytes exist.");
+
+            int[] result = new int[count];
+            for (int i = 0; i < count; i++)
+                result[i] = data[2 + i * 2] | data[3 + i * 2] << 8;
+            return result;
+        }
+
+        public static IReadOnlyList<BuildingModelTextureSet> ReadCurrentRom()
+        {
+            if (GameDirs == null
+                || !GameDirs.ContainsKey(DirNames.AreaData)
+                || !GameDirs.ContainsKey(DirNames.BuildingConfigFiles)
+                || !GameDirs.ContainsKey(DirNames.BuildingTextures))
+                return Array.Empty<BuildingModelTextureSet>();
+
+            DSUtils.TryUnpackNarcs(new List<DirNames>
+            {
+                DirNames.AreaData, DirNames.BuildingConfigFiles, DirNames.BuildingTextures,
+            });
+
+            Dictionary<(int set, bool indoor), List<int>> areas = new Dictionary<(int set, bool indoor), List<int>>();
+            foreach (string path in NumberedFiles(GameDirs[DirNames.AreaData].unpackedDir))
+            {
+                if (!TryFileId(path, out int areaId)) continue;
+                try
+                {
+                    using FileStream input = File.OpenRead(path);
+                    AreaData area = new AreaData(input);
+                    (int, bool IsIndoor) key = ((int)area.BuildingsTileset, area.IsIndoor);
+                    if (!areas.TryGetValue(key, out List<int> ids)) areas[key] = ids = new List<int>();
+                    ids.Add(areaId);
+                }
+                catch (Exception ex)
+                {
+                    AppLogger.Error($"Building texture association skipped area {areaId}: {ex.Message}");
+                }
+            }
+
+            List<BuildingModelTextureSet> result = new List<BuildingModelTextureSet>();
+            foreach (string path in NumberedFiles(GameDirs[DirNames.BuildingConfigFiles].unpackedDir))
+            {
+                if (!TryFileId(path, out int setId)) continue;
+                IReadOnlyList<int> models;
+                try { models = ParseModelIds(File.ReadAllBytes(path)); }
+                catch (Exception ex)
+                {
+                    AppLogger.Error($"Building texture association skipped set {setId}: {ex.Message}");
+                    continue;
+                }
+
+                foreach (KeyValuePair<(int set, bool indoor), List<int>> use in areas.Where(a => a.Key.set == setId))
+                    result.Add(new BuildingModelTextureSet
+                    {
+                        TextureSetId = setId,
+                        Indoor = use.Key.indoor,
+                        ModelIds = models,
+                        AreaIds = use.Value.OrderBy(x => x).ToArray(),
+                    });
+            }
+            return result;
+        }
+
+        /// <summary>Four zero bytes standing in for the textures of an area with no buildings.</summary>
+        public static bool IsNoTexturesStandIn(byte[] file) =>
+            file != null && file.Length == 4 && file[0] == 0 && file[1] == 0 && file[2] == 0 && file[3] == 0;
+
+        /// <summary>The areas that use a building texture set while placing no buildings, so never read it.</summary>
+        public static IReadOnlyList<int> AreasThatNeverReadSet(int setId) =>
+            ReadCurrentRom().Where(s => s.TextureSetId == setId && s.ModelIds.Count == 0)
+                            .SelectMany(s => s.AreaIds).Distinct().OrderBy(x => x).ToArray();
+
+        private static IEnumerable<string> NumberedFiles(string directory) =>
+            Directory.Exists(directory)
+                ? Directory.EnumerateFiles(directory).OrderBy(x => x, StringComparer.Ordinal)
+                : Enumerable.Empty<string>();
+
+        private static bool TryFileId(string path, out int id) =>
+            Int32.TryParse(Path.GetFileName(path), out id);
+    }
+}

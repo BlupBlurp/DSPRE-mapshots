@@ -1,0 +1,60 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="clr-namespace:DSPRE.Avalonia.Controls"
+        xmlns:vm="clr-namespace:DSPRE.Avalonia.ViewModels.World"
+        x:Class="DSPRE.Avalonia.Views.World.AddOverworldEntryView"
+        x:DataType="vm:AddOverworldEntryViewModel"
+        Title="Add custom overworld entry"
+        Width="720" Height="400"
+        MinWidth="640" MinHeight="360"
+        WindowStartupLocation="CenterOwner">
+  <Design.DataContext>
+    <vm:AddOverworldEntryViewModel/>
+  </Design.DataContext>
+
+  <DockPanel Margin="10">
+    <StackPanel DockPanel.Dock="Bottom" Spacing="6" Margin="0,10,0,0">
+      <TextBlock Text="{Binding StatusText}" FontSize="12" Foreground="{DynamicResource Editor.Bad}" TextWrapping="Wrap"/>
+      <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="6">
+        <Button Content="Add" controls:Icon.Key="addIcon" Click="Add_Click" IsDefault="True"/>
+        <Button Content="Cancel" Click="Cancel_Click" IsCancel="True"/>
+      </StackPanel>
+    </StackPanel>
+
+    <Grid ColumnDefinitions="400,14,*">
+    <StackPanel Grid.Column="0" Spacing="4">
+      <controls:HelpTip Text="Needs the overworld sprites expansion patch and a free slot" HorizontalAlignment="Left"
+                        IsVisible="{Binding !IsHgEngine}"/>
+      <controls:HelpTip Text="The new overworld gets the next free number" HorizontalAlignment="Left"
+                        IsVisible="{Binding IsHgEngine}"/>
+
+      <TextBlock Text="Appearance ID (decimal or 0x hex)" FontSize="12" Foreground="{DynamicResource Editor.Subtle}" Margin="0,6,0,0" IsVisible="{Binding !IsHgEngine}"/>
+      <TextBox Text="{Binding AppearanceIdText}" IsVisible="{Binding !IsHgEngine}"/>
+
+      <TextBlock Text="Image (optional, pick first)" FontSize="12" Foreground="{DynamicResource Editor.Subtle}" Margin="0,6,0,0"/>
+      <Grid ColumnDefinitions="*,4,*,4,Auto">
+        <Button Grid.Column="0" Content="Choose PNG…" Click="ChoosePng_Click" HorizontalAlignment="Stretch"
+                ToolTip.Tip="A normal image file. It's converted into the ROM's native texture format on Add."/>
+        <Button Grid.Column="2" Content="Choose raw texture…" Click="ChooseRawBtx_Click" HorizontalAlignment="Stretch"
+                ToolTip.Tip="A texture already in the game's format, copied as it is."/>
+        <Button Grid.Column="4" Content="Clear" controls:Icon.Key="Cross" Click="ClearImage_Click" IsEnabled="{Binding HasImage}"/>
+      </Grid>
+
+      <TextBlock Text="{Binding SlotSectionLabel}" FontSize="12" Foreground="{DynamicResource Editor.Subtle}" Margin="0,6,0,0"/>
+      <ComboBox ItemsSource="{Binding SlotOptions}" SelectedItem="{Binding SelectedSlot}" HorizontalAlignment="Stretch"
+                ToolTip.Tip="{Binding SlotSectionTooltip}"/>
+
+      <TextBlock Text="Copy settings from" FontSize="12" Foreground="{DynamicResource Editor.Subtle}" Margin="0,4,0,0"/>
+      <ComboBox ItemsSource="{Binding CloneOptions}" SelectedItem="{Binding SelectedCloneSource}" HorizontalAlignment="Stretch"
+                ToolTip.Tip="The overworld whose settings the new one copies."/>
+    </StackPanel>
+    <DockPanel Grid.Column="2">
+      <TextBlock DockPanel.Dock="Bottom" Text="{Binding ImageInfoText}" FontSize="12" FontWeight="SemiBold" TextWrapping="Wrap"
+                 IsVisible="{Binding HasImage}" Margin="0,4,0,0"/>
+      <Border BorderBrush="{DynamicResource Editor.Border}" BorderThickness="1" Background="{DynamicResource Editor.PanelBg}">
+        <Image Source="{Binding ImagePreview}" Stretch="Uniform" Margin="4" RenderOptions.BitmapInterpolationMode="None"/>
+      </Border>
+    </DockPanel>
+    </Grid>
+  </DockPanel>
+</Window>

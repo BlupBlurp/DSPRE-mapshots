@@ -1,0 +1,51 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:controls="clr-namespace:DSPRE.Avalonia.Controls"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:DSPRE.Avalonia.ViewModels.Tools"
+        x:Class="DSPRE.Avalonia.Views.Tools.ProjectChecksView"
+        x:DataType="vm:ProjectChecksViewModel"
+        Title="Validation and where used"
+        Width="720" Height="560" MinWidth="520" MinHeight="380"
+        WindowStartupLocation="CenterScreen">
+
+  <Design.DataContext>
+    <vm:ProjectChecksViewModel/>
+  </Design.DataContext>
+
+  <DockPanel>
+    <TabControl Margin="4">
+      <TabItem Header="Validation">
+        <DockPanel>
+          <controls:EditorToolbar>
+              <Button Content="Run validation" controls:Icon.Key="lens" Click="Run_Click" IsEnabled="{Binding !IsRunning}"/>
+              <TextBlock Text="{Binding ValidationStatus}" VerticalAlignment="Center"
+                         Foreground="{DynamicResource Editor.Subtle}" FontSize="12"/>
+          </controls:EditorToolbar>
+          <DataGrid ItemsSource="{Binding Issues}" IsReadOnly="True" GridLinesVisibility="Horizontal"
+                    Margin="4,6,4,4" CanUserResizeColumns="True">
+            <DataGrid.Columns>
+              <DataGridTextColumn Header="Type"   Binding="{Binding Category}" Width="120"/>
+              <DataGridTextColumn Header="Where"  Binding="{Binding Where}"    Width="120"/>
+              <DataGridTextColumn Header="Issue"  Binding="{Binding Message}"  Width="*"/>
+            </DataGrid.Columns>
+          </DataGrid>
+        </DockPanel>
+      </TabItem>
+
+      <TabItem Header="Where used">
+        <DockPanel>
+          <controls:EditorToolbar>
+              <TextBlock Text="File type" VerticalAlignment="Center"/>
+              <ComboBox Width="130" ItemsSource="{Binding RefKinds}" SelectedIndex="{Binding RefKindIndex}"/>
+              <TextBlock Text="Id" VerticalAlignment="Center"/>
+              <NumericUpDown Width="110" Minimum="0" Maximum="65535" Increment="1" FormatString="0" Value="{Binding LookupId}"/>
+              <Button Content="Find headers" controls:Icon.Key="OpenLink" Click="Find_Click"/>
+          </controls:EditorToolbar>
+          <TextBlock DockPanel.Dock="Top" Text="{Binding FindStatus}" Foreground="{DynamicResource Editor.Subtle}"
+                     FontSize="12" Margin="6,4,4,4" TextWrapping="Wrap"/>
+          <ListBox ItemsSource="{Binding FindResults}" Margin="4,0,4,4"/>
+        </DockPanel>
+      </TabItem>
+    </TabControl>
+  </DockPanel>
+</Window>

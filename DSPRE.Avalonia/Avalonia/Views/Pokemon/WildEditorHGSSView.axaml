@@ -1,0 +1,365 @@
+﻿<UserControl xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:DSPRE.Avalonia.ViewModels.Pokemon"
+        xmlns:controls="clr-namespace:DSPRE.Avalonia.Controls"
+        x:Class="DSPRE.Avalonia.Views.Pokemon.WildEditorHGSSView"
+        x:DataType="vm:WildEditorHGSSViewModel">
+  <Design.DataContext>
+    <vm:WildEditorHGSSViewModel/>
+  </Design.DataContext>
+
+  <UserControl.Resources>
+    <DataTemplate x:Key="PokemonEncounterCellTemplate" x:DataType="vm:WildEncounterRow">
+      <Grid ColumnDefinitions="32,*,Auto" ColumnSpacing="6">
+        <Image Source="{Binding PokemonIcon}" Width="32" Height="32" Stretch="Uniform"/>
+        <controls:FusionAutoCompleteBox controls:EditorLink.To="Pokemon" Grid.Column="1"
+                  ItemsSource="{Binding PokemonNames}"
+                  SelectedIndex="{Binding PokemonIndex}"
+                  HorizontalAlignment="Stretch"
+                  VerticalAlignment="Center"/>
+        <NumericUpDown Grid.Column="2" Value="{Binding Form}" Minimum="0" Maximum="31" MinWidth="70"
+                       IsVisible="{Binding ShowForm}" VerticalAlignment="Center" ToolTip.Tip="Form"/>
+      </Grid>
+    </DataTemplate>
+  </UserControl.Resources>
+
+  <UserControl.Styles>
+    <Style Selector="TextBlock.lbl">
+      <Setter Property="VerticalAlignment" Value="Center"/>
+      <Setter Property="Margin" Value="0,0,6,0"/>
+    </Style>
+    <Style Selector="NumericUpDown">
+      <Setter Property="MinWidth" Value="90"/>
+      <Setter Property="FormatString" Value="0"/>
+      <Setter Property="Increment" Value="1"/>
+    </Style>
+    <Style Selector="controls|FusionAutoCompleteBox">
+      <Setter Property="MinWidth" Value="160"/>
+      <Setter Property="MinHeight" Value="32"/>
+    </Style>
+  </UserControl.Styles>
+  <DockPanel LastChildFill="True">
+    <controls:EditorToolbar>
+        <Button Content="Save" controls:Icon.Key="saveButton" Click="Save_Click" IsEnabled="{Binding HasUnsavedChanges}"/>
+        <Button Content="Discard" controls:Icon.Key="resetIcon" Click="Discard_Click" IsEnabled="{Binding HasUnsavedChanges}"/>
+        <controls:UndoRedoButtons/>
+        <TextBlock Text="Encounter file" Classes="lbl" FontWeight="SemiBold" VerticalAlignment="Center" Margin="12,0,6,0"/>
+        <controls:FusionAutoCompleteBox x:Name="FilePicker" ItemsSource="{Binding EncounterNames}" SelectedIndex="{Binding SelectedEncounterIndex}" MinWidth="300"/>
+        <controls:HeadersButton controls:EditorToolbar.Slot="Picker" Source="Encounters" FileId="{Binding SelectedEncounterIndex}"/>
+        <Button Content="Add" controls:Icon.Key="addIcon"     Click="AddFile_Click"/>
+        <Button Content="Remove last" controls:Icon.Key="deleteIcon" Click="RemFile_Click"/>
+        <Button x:Name="ImportButton" Content="Import…" controls:Icon.Key="import" Click="ImportFile_Click"/>
+        <Button Content="Export…" controls:Icon.Key="export" Click="ExportFile_Click"/>
+        <Button Content="Repair all" controls:Icon.Key="wrench" Click="RepairAll_Click" ToolTip.Tip="Reset corrupted fields in every encounter file to defaults"/>
+        <Button x:Name="SlotOddsButton" Content="% slot odds" Click="SlotOdds_Click" ToolTip.Tip="Edit the chance of each slot, shared by every encounter file"/>
+    </controls:EditorToolbar>
+    <Border DockPanel.Dock="Top" Padding="8,3" Margin="10,8,10,0" Background="#2D6A4F" IsVisible="{Binding ShowHgEngineBanner}">
+      <TextBlock Text="{Binding HgEngineBanner}" Foreground="White" FontSize="12"/>
+    </Border>
+    <Border DockPanel.Dock="Top" Padding="8,3" Margin="10,8,10,0" Background="#9B2226" IsVisible="{Binding HasSourceLoadError}">
+      <TextBlock Text="{Binding SourceLoadError, StringFormat='Saving is off: {0}'}" Foreground="White" FontSize="12" TextWrapping="Wrap"/>
+    </Border>
+    <TabControl Margin="10" SelectedIndex="{Binding SelectedTab}">
+      <TabItem Header="Walking">
+        <DockPanel Margin="8">
+          <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="16" Margin="0,0,0,8">
+            <TextBlock Text="Walk rate" Classes="lbl"/>
+            <NumericUpDown Value="{Binding WalkingRate}" Minimum="0" Maximum="255" Width="100"
+                           ToolTip.Tip="0 means nothing appears in the grass"/>
+          </StackPanel>
+          <DataGrid ItemsSource="{Binding WalkingRows}" AutoGenerateColumns="False" CanUserResizeColumns="True">
+            <DataGrid.Columns>
+              <DataGridTextColumn Header="Chance" Binding="{Binding Label}" Width="64" MinWidth="64" IsReadOnly="True"/>
+              <DataGridTemplateColumn Header="Level" Width="96" MinWidth="96">
+                <DataGridTemplateColumn.CellTemplate>
+                  <DataTemplate x:DataType="vm:WildTimeRow"><NumericUpDown Value="{Binding Level}" Minimum="0" Maximum="100"/></DataTemplate>
+                </DataGridTemplateColumn.CellTemplate>
+              </DataGridTemplateColumn>
+              <DataGridTemplateColumn Header="Morning" Width="*" MinWidth="170">
+                <DataGridTemplateColumn.CellTemplate>
+                  <DataTemplate x:DataType="vm:WildTimeRow">
+                    <ContentControl Content="{Binding Main}" ContentTemplate="{StaticResource PokemonEncounterCellTemplate}"/>
+                  </DataTemplate>
+                </DataGridTemplateColumn.CellTemplate>
+              </DataGridTemplateColumn>
+              <DataGridTemplateColumn Header="Day" Width="*" MinWidth="170">
+                <DataGridTemplateColumn.CellTemplate>
+                  <DataTemplate x:DataType="vm:WildTimeRow">
+                    <ContentControl Content="{Binding Day}" ContentTemplate="{StaticResource PokemonEncounterCellTemplate}"/>
+                  </DataTemplate>
+                </DataGridTemplateColumn.CellTemplate>
+              </DataGridTemplateColumn>
+              <DataGridTemplateColumn Header="Night" Width="*" MinWidth="170">
+                <DataGridTemplateColumn.CellTemplate>
+                  <DataTemplate x:DataType="vm:WildTimeRow">
+                    <ContentControl Content="{Binding Night}" ContentTemplate="{StaticResource PokemonEncounterCellTemplate}"/>
+                  </DataTemplate>
+                </DataGridTemplateColumn.CellTemplate>
+              </DataGridTemplateColumn>
+              <DataGridTemplateColumn Header="Replaced by" Width="Auto" MinWidth="90">
+                <DataGridTemplateColumn.CellTemplate>
+                  <DataTemplate x:DataType="vm:WildTimeRow">
+                    <StackPanel Orientation="Horizontal" Spacing="2" Margin="6,0" VerticalAlignment="Center">
+                      <controls:IconImage Key="warning" IsVisible="{Binding Warning, Converter={x:Static ObjectConverters.IsNotNull}}" ToolTip.Tip="{Binding Warning}" VerticalAlignment="Center"/>
+                      <ItemsControl ItemsSource="{Binding Replacements}">
+                        <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                          <DataTemplate x:DataType="vm:WildEncounterRow+Replacement">
+                            <Image Source="{Binding Icon}" Width="28" Height="28" ToolTip.Tip="{Binding Tip}"/>
+                          </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                      </ItemsControl>
+                      <controls:HelpTip Text="{Binding NoteTip}" IsVisible="{Binding NoteTip, Converter={x:Static ObjectConverters.IsNotNull}}"/>
+                    </StackPanel>
+                  </DataTemplate>
+                </DataGridTemplateColumn.CellTemplate>
+              </DataGridTemplateColumn>
+            </DataGrid.Columns>
+          </DataGrid>
+        </DockPanel>
+      </TabItem>
+      <TabItem Header="Water">
+        <DockPanel Margin="8">
+          <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="16" Margin="0,0,0,8">
+            <TextBlock Text="Surf rate"      Classes="lbl"/>
+            <NumericUpDown Value="{Binding SurfRate}"     Minimum="0" Maximum="255" Width="100"/>
+            <TextBlock Text="Old Rod rate"   Classes="lbl"/>
+            <NumericUpDown Value="{Binding OldRodRate}"   Minimum="0" Maximum="255" Width="100"/>
+            <TextBlock Text="Good Rod rate"  Classes="lbl"/>
+            <NumericUpDown Value="{Binding GoodRodRate}"  Minimum="0" Maximum="255" Width="100"/>
+            <TextBlock Text="Super Rod rate" Classes="lbl"/>
+            <NumericUpDown Value="{Binding SuperRodRate}" Minimum="0" Maximum="255" Width="100"/>
+          </StackPanel>
+          <ScrollViewer>
+            <StackPanel Spacing="8">
+              <GroupBox Header="Surf">
+                <DataGrid ItemsSource="{Binding SurfRows}" AutoGenerateColumns="False">
+                  <DataGrid.Columns>
+                    <DataGridTextColumn Header="Chance" Binding="{Binding Label}" Width="90" MinWidth="90" IsReadOnly="True"/>
+                    <DataGridTemplateColumn Header="Pokémon" Width="*" MaxWidth="460" CellTemplate="{StaticResource PokemonEncounterCellTemplate}"/>
+                    <DataGridTemplateColumn Header="Level" Width="190">
+                      <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate x:DataType="vm:WildEncounterRow">
+                          <StackPanel Orientation="Horizontal" Spacing="4">
+                            <NumericUpDown Value="{Binding MinLevel}" Minimum="0" Maximum="100" MinWidth="80" ToolTip.Tip="Lowest level"/>
+                            <TextBlock Text="to" VerticalAlignment="Center"/>
+                            <NumericUpDown Value="{Binding MaxLevel}" Minimum="0" Maximum="100" MinWidth="80" ToolTip.Tip="Highest level"/>
+                          </StackPanel>
+                        </DataTemplate>
+                      </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                    <DataGridTemplateColumn Header="Replaced by" Width="Auto" MinWidth="90">
+                      <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate x:DataType="vm:WildEncounterRow">
+                          <StackPanel Orientation="Horizontal" Spacing="2" Margin="6,0" VerticalAlignment="Center">
+                      <controls:IconImage Key="warning" IsVisible="{Binding Warning, Converter={x:Static ObjectConverters.IsNotNull}}" ToolTip.Tip="{Binding Warning}" VerticalAlignment="Center"/>
+                      <ItemsControl ItemsSource="{Binding Replacements}">
+                        <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                          <DataTemplate x:DataType="vm:WildEncounterRow+Replacement">
+                            <Image Source="{Binding Icon}" Width="28" Height="28" ToolTip.Tip="{Binding Tip}"/>
+                          </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                      </ItemsControl>
+                      <controls:HelpTip Text="{Binding NoteTip}" IsVisible="{Binding NoteTip, Converter={x:Static ObjectConverters.IsNotNull}}"/>
+                    </StackPanel>
+                        </DataTemplate>
+                      </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                  </DataGrid.Columns>
+                </DataGrid>
+              </GroupBox>
+              <GroupBox Header="Old Rod">
+                <DataGrid ItemsSource="{Binding OldRodRows}" AutoGenerateColumns="False">
+                  <DataGrid.Columns>
+                    <DataGridTextColumn Header="Chance" Binding="{Binding Label}" Width="90" MinWidth="90" IsReadOnly="True"/>
+                    <DataGridTemplateColumn Header="Pokémon" Width="*" MaxWidth="460" CellTemplate="{StaticResource PokemonEncounterCellTemplate}"/>
+                    <DataGridTemplateColumn Header="Level" Width="190">
+                      <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate x:DataType="vm:WildEncounterRow">
+                          <StackPanel Orientation="Horizontal" Spacing="4">
+                            <NumericUpDown Value="{Binding MinLevel}" Minimum="0" Maximum="100" MinWidth="80" ToolTip.Tip="Lowest level"/>
+                            <TextBlock Text="to" VerticalAlignment="Center"/>
+                            <NumericUpDown Value="{Binding MaxLevel}" Minimum="0" Maximum="100" MinWidth="80" ToolTip.Tip="Highest level"/>
+                          </StackPanel>
+                        </DataTemplate>
+                      </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                    <DataGridTemplateColumn Header="Replaced by" Width="Auto" MinWidth="90">
+                      <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate x:DataType="vm:WildEncounterRow">
+                          <StackPanel Orientation="Horizontal" Spacing="2" Margin="6,0" VerticalAlignment="Center">
+                      <controls:IconImage Key="warning" IsVisible="{Binding Warning, Converter={x:Static ObjectConverters.IsNotNull}}" ToolTip.Tip="{Binding Warning}" VerticalAlignment="Center"/>
+                      <ItemsControl ItemsSource="{Binding Replacements}">
+                        <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                          <DataTemplate x:DataType="vm:WildEncounterRow+Replacement">
+                            <Image Source="{Binding Icon}" Width="28" Height="28" ToolTip.Tip="{Binding Tip}"/>
+                          </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                      </ItemsControl>
+                      <controls:HelpTip Text="{Binding NoteTip}" IsVisible="{Binding NoteTip, Converter={x:Static ObjectConverters.IsNotNull}}"/>
+                    </StackPanel>
+                        </DataTemplate>
+                      </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                  </DataGrid.Columns>
+                </DataGrid>
+              </GroupBox>
+              <GroupBox Header="Good Rod">
+                <DataGrid ItemsSource="{Binding GoodRodRows}" AutoGenerateColumns="False">
+                  <DataGrid.Columns>
+                    <DataGridTextColumn Header="Chance" Binding="{Binding Label}" Width="90" MinWidth="90" IsReadOnly="True"/>
+                    <DataGridTemplateColumn Header="Pokémon" Width="*" MaxWidth="460" CellTemplate="{StaticResource PokemonEncounterCellTemplate}"/>
+                    <DataGridTemplateColumn Header="Level" Width="190">
+                      <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate x:DataType="vm:WildEncounterRow">
+                          <StackPanel Orientation="Horizontal" Spacing="4">
+                            <NumericUpDown Value="{Binding MinLevel}" Minimum="0" Maximum="100" MinWidth="80" ToolTip.Tip="Lowest level"/>
+                            <TextBlock Text="to" VerticalAlignment="Center"/>
+                            <NumericUpDown Value="{Binding MaxLevel}" Minimum="0" Maximum="100" MinWidth="80" ToolTip.Tip="Highest level"/>
+                          </StackPanel>
+                        </DataTemplate>
+                      </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                    <DataGridTemplateColumn Header="Replaced by" Width="Auto" MinWidth="90">
+                      <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate x:DataType="vm:WildEncounterRow">
+                          <StackPanel Orientation="Horizontal" Spacing="2" Margin="6,0" VerticalAlignment="Center">
+                      <controls:IconImage Key="warning" IsVisible="{Binding Warning, Converter={x:Static ObjectConverters.IsNotNull}}" ToolTip.Tip="{Binding Warning}" VerticalAlignment="Center"/>
+                      <ItemsControl ItemsSource="{Binding Replacements}">
+                        <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                          <DataTemplate x:DataType="vm:WildEncounterRow+Replacement">
+                            <Image Source="{Binding Icon}" Width="28" Height="28" ToolTip.Tip="{Binding Tip}"/>
+                          </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                      </ItemsControl>
+                      <controls:HelpTip Text="{Binding NoteTip}" IsVisible="{Binding NoteTip, Converter={x:Static ObjectConverters.IsNotNull}}"/>
+                    </StackPanel>
+                        </DataTemplate>
+                      </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                  </DataGrid.Columns>
+                </DataGrid>
+              </GroupBox>
+              <GroupBox Header="Super Rod">
+                <DataGrid ItemsSource="{Binding SuperRodRows}" AutoGenerateColumns="False">
+                  <DataGrid.Columns>
+                    <DataGridTextColumn Header="Chance" Binding="{Binding Label}" Width="90" MinWidth="90" IsReadOnly="True"/>
+                    <DataGridTemplateColumn Header="Pokémon" Width="*" MaxWidth="460" CellTemplate="{StaticResource PokemonEncounterCellTemplate}"/>
+                    <DataGridTemplateColumn Header="Level" Width="190">
+                      <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate x:DataType="vm:WildEncounterRow">
+                          <StackPanel Orientation="Horizontal" Spacing="4">
+                            <NumericUpDown Value="{Binding MinLevel}" Minimum="0" Maximum="100" MinWidth="80" ToolTip.Tip="Lowest level"/>
+                            <TextBlock Text="to" VerticalAlignment="Center"/>
+                            <NumericUpDown Value="{Binding MaxLevel}" Minimum="0" Maximum="100" MinWidth="80" ToolTip.Tip="Highest level"/>
+                          </StackPanel>
+                        </DataTemplate>
+                      </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                    <DataGridTemplateColumn Header="Replaced by" Width="Auto" MinWidth="90">
+                      <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate x:DataType="vm:WildEncounterRow">
+                          <StackPanel Orientation="Horizontal" Spacing="2" Margin="6,0" VerticalAlignment="Center">
+                      <controls:IconImage Key="warning" IsVisible="{Binding Warning, Converter={x:Static ObjectConverters.IsNotNull}}" ToolTip.Tip="{Binding Warning}" VerticalAlignment="Center"/>
+                      <ItemsControl ItemsSource="{Binding Replacements}">
+                        <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                          <DataTemplate x:DataType="vm:WildEncounterRow+Replacement">
+                            <Image Source="{Binding Icon}" Width="28" Height="28" ToolTip.Tip="{Binding Tip}"/>
+                          </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                      </ItemsControl>
+                      <controls:HelpTip Text="{Binding NoteTip}" IsVisible="{Binding NoteTip, Converter={x:Static ObjectConverters.IsNotNull}}"/>
+                    </StackPanel>
+                        </DataTemplate>
+                      </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                  </DataGrid.Columns>
+                </DataGrid>
+              </GroupBox>
+            </StackPanel>
+          </ScrollViewer>
+        </DockPanel>
+      </TabItem>
+      <TabItem Header="Special">
+        <ScrollViewer>
+          <StackPanel Spacing="8" Margin="8">
+            <GroupBox Header="Swarms and night fishing">
+              <DataGrid ItemsSource="{Binding SwarmRows}" AutoGenerateColumns="False">
+                <DataGrid.Columns>
+                  <DataGridTextColumn Header="Slot" Binding="{Binding Label}" Width="150" IsReadOnly="True"/>
+                  <DataGridTemplateColumn Header="Pokémon" Width="*" MaxWidth="460" CellTemplate="{StaticResource PokemonEncounterCellTemplate}"/>
+                  <DataGridTemplateColumn Header="Replaces" Width="Auto" MinWidth="140">
+                      <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate x:DataType="vm:WildEncounterRow">
+                          <StackPanel Orientation="Horizontal" Spacing="4" Margin="6,0" VerticalAlignment="Center"><controls:IconImage Key="warning" IsVisible="{Binding Warning, Converter={x:Static ObjectConverters.IsNotNull}}" ToolTip.Tip="{Binding Warning}" VerticalAlignment="Center"/><TextBlock Text="{Binding Note}" ToolTip.Tip="{Binding NoteTip}" VerticalAlignment="Center"
+                                     Foreground="{DynamicResource Editor.Subtle}"/></StackPanel>
+                        </DataTemplate>
+                      </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                </DataGrid.Columns>
+              </DataGrid>
+            </GroupBox>
+            <GroupBox Header="Radio">
+              <DataGrid ItemsSource="{Binding RadioRows}" AutoGenerateColumns="False">
+                <DataGrid.Columns>
+                  <DataGridTextColumn Header="Slot" Binding="{Binding Label}" Width="150" IsReadOnly="True"/>
+                  <DataGridTemplateColumn Header="Hoenn Sound" Width="*" MaxWidth="460">
+                    <DataGridTemplateColumn.CellTemplate>
+                      <DataTemplate x:DataType="vm:WildRadioRow">
+                        <ContentControl Content="{Binding Hoenn}" ContentTemplate="{StaticResource PokemonEncounterCellTemplate}"/>
+                      </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                  </DataGridTemplateColumn>
+                  <DataGridTemplateColumn Header="Sinnoh Sound" Width="*" MaxWidth="460">
+                    <DataGridTemplateColumn.CellTemplate>
+                      <DataTemplate x:DataType="vm:WildRadioRow">
+                        <ContentControl Content="{Binding Sinnoh}" ContentTemplate="{StaticResource PokemonEncounterCellTemplate}"/>
+                      </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                  </DataGridTemplateColumn>
+                  <DataGridTemplateColumn Header="Replaces" Width="Auto" MinWidth="140">
+                      <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate x:DataType="vm:WildRadioRow">
+                          <StackPanel Orientation="Horizontal" Spacing="4" Margin="6,0" VerticalAlignment="Center"><controls:IconImage Key="warning" IsVisible="{Binding Warning, Converter={x:Static ObjectConverters.IsNotNull}}" ToolTip.Tip="{Binding Warning}" VerticalAlignment="Center"/><TextBlock Text="{Binding Note}" ToolTip.Tip="{Binding NoteTip}" VerticalAlignment="Center"
+                                     Foreground="{DynamicResource Editor.Subtle}"/></StackPanel>
+                        </DataTemplate>
+                      </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                </DataGrid.Columns>
+              </DataGrid>
+            </GroupBox>
+            <GroupBox Header="Rock Smash">
+              <StackPanel Spacing="4">
+                <StackPanel Orientation="Horizontal" Spacing="12">
+                  <TextBlock Text="Rock Smash rate" Classes="lbl"/>
+                  <NumericUpDown Value="{Binding RockSmashRate}" Minimum="0" Maximum="255" Width="100"/>
+                </StackPanel>
+                <DataGrid ItemsSource="{Binding RockSmashRows}" AutoGenerateColumns="False">
+                  <DataGrid.Columns>
+                    <DataGridTextColumn Header="Chance" Binding="{Binding Label}" Width="150" MinWidth="150" IsReadOnly="True"/>
+                    <DataGridTemplateColumn Header="Pokémon" Width="*" MaxWidth="460" CellTemplate="{StaticResource PokemonEncounterCellTemplate}"/>
+                    <DataGridTemplateColumn Header="Level" Width="190">
+                      <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate x:DataType="vm:WildEncounterRow">
+                          <StackPanel Orientation="Horizontal" Spacing="4">
+                            <NumericUpDown Value="{Binding MinLevel}" Minimum="0" Maximum="100" MinWidth="80" ToolTip.Tip="Lowest level"/>
+                            <TextBlock Text="to" VerticalAlignment="Center"/>
+                            <NumericUpDown Value="{Binding MaxLevel}" Minimum="0" Maximum="100" MinWidth="80" ToolTip.Tip="Highest level"/>
+                          </StackPanel>
+                        </DataTemplate>
+                      </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                  </DataGrid.Columns>
+                </DataGrid>
+              </StackPanel>
+            </GroupBox>
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
+    </TabControl>
+  </DockPanel>
+</UserControl>
