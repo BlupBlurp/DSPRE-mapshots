@@ -137,7 +137,8 @@ let later overlays paint across tree canopies and raised rims.
   `lighting: false`, or pass `--no-light`, for a map that should stay flat. The Hearthome reference
   calibrated the light direction and strength.
 - `hideMaterials` extends the default `lambert1` void layer. Veilstone also needs `lambert8`, an
-  opaque black backdrop plane that otherwise covers its right wall.
+  opaque black backdrop plane that otherwise covers its right wall. Each entry names one material in
+  full and is matched case-insensitively, so `lambert1` leaves a wall material such as `lambert10` alone.
 - `enabled: false` leaves a header out of a full batch.
 - `animate: true` writes an APNG instead of a PNG. `format` is `apng` (default) or `gif`; `frames` samples the animation loop, 120 by default. An animated entry cannot use `stack`. See below for the clock, APNG and GIF limits.
 
@@ -200,7 +201,7 @@ broadly supported file matters more than exact colour.
 | SpearPillar.png | 220 `D05R0114` | 512×1024 | 351×723 | pitch 50, 16 px/tile |
 
 Content sizes are measured on the references' alpha. Veilstone comes out 386×379, Pastoria 400×529
-and the Sunyshore stack 336×909, within a few percent of the rips. Oreburgh is 256×410 against
+and the Sunyshore stack 336×941, within a few percent of the rips. Oreburgh is 256×410 against
 230×392 because our scene includes the outer rock ring the rip cropped away; `offsetXTiles` /
 `offsetZTiles` shift that framing if a tighter crop is wanted. Spear Pillar's full 2×2 summit is
 wider than the reference's 351×723 window, so use `cells` or a smaller `width` to isolate the
@@ -228,8 +229,11 @@ platform.
 - Map-shot lighting is a single directional approximation using geometric face normals and the
   material's ambient/diffuse colours. It does not reproduce the full NDS four-light setup, per-vertex
   normals, specular highlights, or time-of-day area lighting.
-- Sunyshore's cogs and the wider door surrounds belong to cells outside each 1x1 header. The packed
-  image shows each header's own cell plus its shadow overlay, not the neighbouring floor's border.
+- Sunyshore's cog platforms are not in the rooms' map data. No map's building list places the
+  `gym_gear01` to `gym_gear04_2` models (0457 to 0464), and each room's map model is flat, so the
+  still shows the dark floor where the game's rotating platforms stand. The wider door surrounds
+  belong to cells outside each 1x1 header, so the packed image shows each header's own cell plus its
+  shadow overlay, not the neighbouring floor's border.
 - Spear Pillar's reference is a 512×1024 window on the 2×2 summit matrix; the batch renders the
   whole summit, and its `mapshots.json` entry fixes the canvas at 512×1024. `cells` can isolate one
   strip of the matrix. The reference's tighter platform framing is not reproduced exactly.

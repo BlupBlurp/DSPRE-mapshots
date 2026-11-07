@@ -651,10 +651,12 @@ namespace DSPRE.Avalonia.MapShots
                     || materialName.IndexOf("shadow", StringComparison.OrdinalIgnoreCase) >= 0)) hidden.Add(kv.Key);
                 // The game's own black backdrop hides the void outside a room; a map rip has nothing there.
                 if (string.Equals(materialName, "lambert1", StringComparison.OrdinalIgnoreCase)) hidden.Add(kv.Key);
+                // Each hide entry names one material: a short default such as lambert1 must not take
+                // lambert10 and its neighbours with it, which left Pal Park's entry building as its glass.
                 if (extra != null)
                     foreach (string wanted in extra)
                         if (!string.IsNullOrWhiteSpace(wanted)
-                            && materialName.IndexOf(wanted, StringComparison.OrdinalIgnoreCase) >= 0) hidden.Add(kv.Key);
+                            && string.Equals(materialName, wanted.Trim(), StringComparison.OrdinalIgnoreCase)) hidden.Add(kv.Key);
             }
             return hidden;
         }
