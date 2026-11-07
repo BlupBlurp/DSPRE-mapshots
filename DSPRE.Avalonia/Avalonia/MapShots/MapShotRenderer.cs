@@ -58,6 +58,15 @@ namespace DSPRE.Avalonia.MapShots
         public bool NoTextures;
     }
 
+    /// <summary>One animated frame's overrides, keyed by scene material. Null members leave the scene's own value.</summary>
+    public sealed class MapShotFrame
+    {
+        public Dictionary<int, float[]> TextureMatrices;
+        public Dictionary<int, string> TextureSwaps;
+        public Dictionary<int, float> MaterialFades;
+        public Dictionary<int, float[]> MovedParts;
+    }
+
     public sealed class MapShotStats
     {
         public int Triangles, DrawnTriangles;
@@ -105,7 +114,7 @@ namespace DSPRE.Avalonia.MapShots
             }
         }
 
-        public static RawImage Render(NsbmdRenderModel scene, MapShotCamera cam, out MapShotStats stats)
+        public static RawImage Render(NsbmdRenderModel scene, MapShotCamera cam, out MapShotStats stats, MapShotFrame frame = null)
         {
             stats = new MapShotStats();
             RawImage image = new RawImage(cam.Width, cam.Height);
@@ -161,22 +170,43 @@ namespace DSPRE.Avalonia.MapShots
                     if (cam.HiddenMaterials != null && cam.HiddenMaterials.Contains(part.MaterialIndex)) continue;
 
                     NsbmdTextureData tex = null;
-                    if (scene.Textures != null) scene.Textures.TryGetValue(part.MaterialIndex, out tex);
+                    if (frame?.TextureSwaps != null
+                        && frame.TextureSwaps.TryGetValue(part.MaterialIndex, out string swapName)
+                        && !string.IsNullOrEmpty(swapName)
+                        && scene.SwappableTextures != null
+                        && scene.SwappableTextures.TryGetValue(part.MaterialIndex, out Dictionary<string, NsbmdTextureData> byName)
+                        && byName.TryGetValue(swapName, out NsbmdTextureData swapped))
+                    {
+                        tex = swapped;
+                    }
+                    else if (scene.Textures != null) scene.Textures.TryGetValue(part.MaterialIndex, out tex);
                     bool hasTexture = !cam.NoTextures && tex != null && tex.Rgba != null && tex.Width > 0 && tex.Height > 0;
+
+                    float alpha = part.Alpha;
+                    if (frame?.MaterialFades != null && frame.MaterialFades.TryGetValue(part.MaterialIndex, out float faded))
+                        alpha = faded;
                     // Only a material alpha below solid needs blending. A cut-out texture stays in the opaque
                     // pass and writes depth, or a later overlay passes the depth test through a tree canopy.
-                    bool translucent = part.Alpha < 0.999f;
+                    bool translucent = alpha < 0.999f;
                     if (translucent != (pass == 1)) continue;
-
-                    float[] m = part.TexMatrix;
-                    bool hasMatrix = !cam.IgnoreTextureMatrices && m != null && m.Length >= 9;
-                    float alpha = part.Alpha;
                     if (alpha <= 0.001f) continue;
 
-                    int n = part.VertexCount;
+                    float[] m = part.TexMatrix;
+                    if (frame?.TextureMatrices != null
+                        && frame.TextureMatrices.TryGetValue(part.MaterialIndex, out float[] animatedMatrix)
+                        && animatedMatrix != null && animatedMatrix.Length >= 9)
+                        m = animatedMatrix;
+                    bool hasMatrix = !cam.IgnoreTextureMatrices && m != null && m.Length >= 9;
+
+                    float[] v = part.Vertices;
+                    if (frame?.MovedParts != null
+                        && frame.MovedParts.TryGetValue(part.MaterialIndex, out float[] moved)
+                        && moved != null && moved.Length >= 24)
+                        v = moved;
+                    int n = v.Length / 8;
+                    if (n < 3) continue;
                     float[] sx = new float[n], sy = new float[n], sz = new float[n], su = new float[n], sv = new float[n];
                     float[] sr = new float[n], sg = new float[n], sb = new float[n];
-                    float[] v = part.Vertices;
                     for (int i = 0; i < n; i++)
                     {
                         int o = i * 8;
@@ -198,7 +228,7 @@ namespace DSPRE.Avalonia.MapShots
                         sr[i] = v[o + 5]; sg[i] = v[o + 6]; sb[i] = v[o + 7];
                     }
 
-                    DrawPart(part, tex, hasTexture, alpha, cam.FlipCulling, cam.NoShading, cam.ForceShading, light,
+                    DrawPart(part, tex, hasTexture, alpha, v, cam.FlipCulling, cam.NoShading, cam.ForceShading, light,
                         sx, sy, sz, su, sv, sr, sg, sb, pixels, depth, written, materialMap, width, height, stats);
                 }
             }
@@ -207,7 +237,8 @@ namespace DSPRE.Avalonia.MapShots
         }
 
         private static void DrawPart(NsbmdMeshPart part, NsbmdTextureData tex, bool textured,
-            float alpha, bool flipCulling, bool noShading, bool forceShading, MapShotLight light, float[] sx, float[] sy, float[] sz, float[] su, float[] sv,
+            float alpha, float[] vertices, bool flipCulling, bool noShading, bool forceShading, MapShotLight light,
+            float[] sx, float[] sy, float[] sz, float[] su, float[] sv,
             float[] sr, float[] sg, float[] sb, byte[] pixels, float[] depth, bool[] written, int[] materialMap,
             int width, int height, MapShotStats stats)
         {
@@ -218,8 +249,8 @@ namespace DSPRE.Avalonia.MapShots
             // The depth range spans 8000 scene units, so this is a few hundredths of a unit. A larger NDC
             // bias moves a ground shadow several units forward and draws it over the wall behind it.
             float depthBias = bias ? 0.000002f : 0f;
-            int n = part.VertexCount;
-            float[] raw = part.Vertices;
+            int n = vertices.Length / 8;
+            float[] raw = vertices;
             byte[] texels = textured ? tex.Rgba : null;
             int tw = textured ? tex.Width : 0, th = textured ? tex.Height : 0;
             int wrapS = textured ? tex.WrapS : 0, wrapT = textured ? tex.WrapT : 0;

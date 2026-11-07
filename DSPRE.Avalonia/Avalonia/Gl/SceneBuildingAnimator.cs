@@ -34,6 +34,9 @@ namespace DSPRE.Avalonia.Gl
         public int TimeBuildings { get; private set; }
         public int ScrolledSurfaces => _scrolled.Count;
 
+        /// <summary>Frames before every building animation in the scene starts over, capped for still batches.</summary>
+        public int LoopFrames { get; private set; } = 1;
+
         /// <summary>Whether any building in the scene animates by itself.</summary>
         public bool HasAnything => _scrolled.Count > 0 || _swapped.Count > 0 || _faded.Count > 0 || _jointed.Count > 0 || _moving.Count > 0;
 
@@ -94,6 +97,28 @@ namespace DSPRE.Avalonia.Gl
                     if (!moves) MovingBuildings++;
                 }
             }
+
+            int loop = 1;
+            foreach (KeyValuePair<int, (TextureSrtAnimation anim, int material, int mode)> kv in _scrolled)
+                loop = CombineLoop(loop, kv.Value.anim.FrameCount);
+            foreach (KeyValuePair<int, (TexturePatternAnimation anim, int material)> kv in _swapped)
+                loop = CombineLoop(loop, kv.Value.anim.FrameCount);
+            foreach (KeyValuePair<int, (MaterialColourAnimation anim, int material)> kv in _faded)
+                loop = CombineLoop(loop, kv.Value.anim.FrameCount);
+            foreach ((NsbmdRenderModel.BuildingMaterials building, JointAnimation anim) in _jointed)
+                loop = CombineLoop(loop, anim.FrameCount);
+            LoopFrames = loop;
+        }
+
+        /// <summary>The least common multiple of two loops, kept small enough to be a practical capture.</summary>
+        private static int CombineLoop(int a, int b)
+        {
+            if (a <= 1) return Math.Max(1, b);
+            if (b <= 1) return a;
+            int x = a, y = b;
+            while (y != 0) { int t = x % y; x = y; y = t; }
+            long value = (long)a / x * b;
+            return value > 600 ? 600 : (int)value;
         }
 
         /// <summary>The buildings' state at a field frame (30 a second).</summary>

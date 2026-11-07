@@ -16,6 +16,12 @@ namespace DSPRE.Avalonia.MapShots
         public int MapCount;
         public NsbmdRenderModel Scene;
 
+        /// <summary>Whether the area uses HeartGold's interior building set, as the map view decides.</summary>
+        public bool Indoor;
+
+        /// <summary>The clock part the map view uses when it picks a building's time-of-day animation.</summary>
+        public FieldTimeZone TimeOfDay = FieldTimeOfDay.Now;
+
         /// <summary>The map cells this header owns, in matrix order.</summary>
         public List<(int CellX, int CellY, int MapIndex)> Cells = new List<(int, int, int)>();
 
@@ -109,6 +115,12 @@ namespace DSPRE.Avalonia.MapShots
                 MatrixWidth = matrix.Width,
                 MatrixHeight = matrix.Height,
             };
+            try
+            {
+                result.Indoor = RomInfo.GameFamily == RomInfo.GameFamilies.HGSS
+                    && new AreaData(header.AreaDataID).AreaType == AreaData.TYPE_INDOOR;
+            }
+            catch (Exception ex) { AppLogger.WarnOnce("MapShotScenes.Indoor", ex); }
 
             List<(int cellX, int cellY, MapFile map, byte areaId, float altitudeY)> loaded =
                 new List<(int, int, MapFile, byte, float)>();

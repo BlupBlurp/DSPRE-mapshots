@@ -1,8 +1,9 @@
 # Map screenshots
 
-`DSPRE.Avalonia --map-shots` renders every map header of a project to a PNG without opening a
-window, a GL context or any editor. It uses the same map, tileset, building and animation data as
-the Map editor, and a small software rasterizer that follows the editor's GL state. Characters are
+`DSPRE.Avalonia --map-shots` renders map headers of a project to a PNG, or to a lossless animated
+PNG (APNG) with `--animate`, without opening a window, a GL context or any editor. A GIF fallback is
+available with `--format gif`. It uses the same map, tileset, building and animation data as the
+Map editor, and a small software rasterizer that follows the editor's GL state. Characters are
 never part of a map scene, so screenshots contain no trainers, NPCs or player.
 
 ## Usage
@@ -25,6 +26,12 @@ never part of a map scene, so screenshots contain no trainers, NPCs or player.
 
 # What a header contains, without writing an image
 ./mapshots.sh --info --maps 47
+
+# Lossless animated APNG at the still PNG's 1024x1024 resolution
+./mapshots.sh --maps 221 --animate --frames 120 --scale 16 --out mapshots
+
+# Smaller 255-colour GIF fallback
+./mapshots.sh --maps 221 --animate --frames 120 --scale 8 --format gif --out mapshots
 ```
 
 `mapshots.sh` builds the project first. The executable can also be called directly:
@@ -49,7 +56,7 @@ Options:
 | `--config <file>` | Settings file, `mapshots.json` here by default. |
 | `--maps 5,35` | Only these header numbers. |
 | `--filter <text>` | Only headers whose name contains the text. |
-| `--force` | Replace existing PNGs. Without it a non-empty PNG is left alone. |
+| `--force` | Replace existing images. Without it a non-empty image is left alone. |
 | `--scale <n>` | Pixels per map tile. Default 16. |
 | `--width`, `--height` | Fixed canvas size. Default is fitted and rounded up to 512. |
 | `--pitch <degrees>` | Camera angle. 90 is straight down, 50 matches the reference rips. |
@@ -63,6 +70,9 @@ Options:
 | `--info` | Matrix, cells, content bounds and suggested canvas for the selected maps. |
 | `--materials` | With `--info`, dump every material and its texture. |
 | `--pick x,y` | Print the material that drew a pixel, for diagnosing a texture. |
+| `--animate` | Write an animated APNG (or GIF with `--format gif`) instead of a PNG. |
+| `--frames <n>` | Frames sampled from one animation loop. Default 120. |
+| `--format apng` / `--format gif` | Animated format. APNG is lossless and the default; GIF is smaller and limited to 255 colours. |
 
 ## How the reference look is reproduced
 
@@ -129,10 +139,55 @@ let later overlays paint across tree canopies and raised rims.
 - `hideMaterials` extends the default `lambert1` void layer. Veilstone also needs `lambert8`, an
   opaque black backdrop plane that otherwise covers its right wall.
 - `enabled: false` leaves a header out of a full batch.
+- `animate: true` writes an APNG instead of a PNG. `format` is `apng` (default) or `gif`; `frames` samples the animation loop, 120 by default. An animated entry cannot use `stack`. See below for the clock, APNG and GIF limits.
 
 The five reference maps are pinned in `mapshots.json`: Oreburgh Gym 47, Pastoria Gym 122,
 Veilstone Gym 133, Sunyshore Gym 156+155+154, Spear Pillar 220. Directional lighting applies to
 all maps through the defaults block unless an entry sets `lighting: false`.
+
+## Animated captures
+
+`--animate`, or `"animate": true` on a map entry, renders the scene on the field's 30-steps-a-second
+clock instead of as one still. It uses the same building animator as the map view:
+
+- building texture scrolls and swaps, material fades, joint motion and whole-model motion;
+- the area's terrain scroll on HeartGold and SoulSilver;
+- `fldtanime` texture swaps on the map's own materials.
+
+The loop is the least common multiple of the animation lengths, capped at 600 frames. A scene
+whose combined loop is longer repeats at 600 frames rather than at a perfect loop. `--frames N`
+samples that loop down to at most N frames. The default 120 frames turns a 240-frame loop into 120
+frames. A scene with no finite loop uses N frames at 30 Hz. Animated captures must name one header;
+an entry with `stack` is rejected.
+
+Animated output is APNG by default: 8-bit RGBA, lossless, with exact `step/30` frame delays, one
+full-canvas frame per step and an infinite loop. APNG keeps the still PNG's pixels and transparency,
+so a 16 px/tile capture matches the still image exactly. Files are larger than GIF; the header 221
+example is about 18 MB. `--format gif` selects GIF89a instead, with one global palette of up to 255
+colours plus index 0 for transparency, disposal method 2 and an infinite loop. GIF is smaller and
+universally readable, but a map with more than 255 colours loses fidelity; header 221 has 889
+colours. GIF delays are hundredths of a second, so its 30 Hz timing is rounded. APNG delays are
+exact.
+
+Header 221 (`221 Spear Pillar`) exercises all of this. Its 2x2 summit has 120-frame texture scrolls
+on buildings 579 and 580 and a 240-frame joint animation on building 581; the joint animation is the
+visible portal motion. This entry reproduces it:
+
+```json
+{
+  "id": 221,
+  "file": "221 Spear Pillar.apng",
+  "pixelsPerTile": 16,
+  "animate": true,
+  "frames": 120,
+  "format": "apng"
+}
+```
+
+At `pixelsPerTile: 16` the fitted canvas is 1024x1024, the same as the still PNG, and the first APNG
+frame is byte-identical to `221 Spear Pillar.png`. At 8 the canvas is 512x512, half the resolution,
+which is why the earlier GIF looked pixelated. `--format gif --scale 8` is available when a smaller,
+broadly supported file matters more than exact colour.
 
 ## Measured reference properties
 
@@ -153,10 +208,14 @@ platform.
 
 ## Known limits
 
-- Texture and terrain animations are frozen at their resting frame. Water sparkle, animated gym
-  mats and scripted map changes (Pastoria's raised platforms, for example) show the default state,
-  not a particular in-game moment. This is why Pastoria's moving platforms and wave layer differ
-  from the reference rip.
+- Without `--animate`, texture and terrain animations are frozen at their resting frame. Water
+  sparkle, animated gym mats and scripted map changes (Pastoria's raised platforms, for example)
+  show the default state, not a particular in-game moment. This is why Pastoria's moving platforms
+  and wave layer differ from the reference rip.
+- Animated captures follow the automatic field animations only. Scripted changes, doors, time-of-day
+  triggers and the wave layer still show the default state.
+- APNG is lossless but larger than GIF. GIF is limited to 255 colours, so use APNG for pixel-art
+  captures that must match the still PNG.
 - `--no-shadows` removes the baked cast-shadow materials. It does not remove the black backdrop
   planes, which are ordinary opaque geometry; hide those per map with `hideMaterials`.
 - Overworld sprites are not part of a map scene. NPCs, the player, trainers and sprite props such as
@@ -185,10 +244,10 @@ platform.
 ## Output
 
 Files are named `NNN ` plus the header's place name (for example `120 Pastoria City.png` and
-`399 Route 224.png`), or the `file` in a config entry. The number keeps names unique where two
-headers share a place name. The batch reports each header, skips files that already exist unless
-`--force` is given, and carries on after a failure, ending with a count and a non-zero exit code if
-anything failed.
+`399 Route 224.png`), or the `file` in a config entry. Animated entries use `.apng`, or `.gif` with
+`--format gif`. The number keeps names unique where two headers share a place name. The batch reports
+each header, skips files that already exist unless `--force` is given, and carries on after a failure,
+ending with a count and a non-zero exit code if anything failed.
 
 The five renders used to calibrate the camera and config are in `reference_shots/`. Recreate them
 with `./mapshots.sh --maps 47,122,133,156,220 --out reference_shots --force`.

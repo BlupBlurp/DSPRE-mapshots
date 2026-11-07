@@ -47,6 +47,15 @@ namespace DSPRE.Avalonia.MapShots
 
         /// <summary>Apply directional face lighting to opaque textured geometry. On by default.</summary>
         public bool? Lighting { get; set; }
+
+        /// <summary>Write an animated GIF of the map's field animations instead of a still PNG.</summary>
+        public bool? Animate { get; set; }
+
+        /// <summary>Frames to sample over one animation loop. Default is half the loop, at most 120.</summary>
+        public int? Frames { get; set; }
+
+        /// <summary>Animated output format: "apng" (default) or "gif".</summary>
+        public string Format { get; set; }
     }
 
     public sealed class MapShotConfig
@@ -88,6 +97,9 @@ namespace DSPRE.Avalonia.MapShots
             public bool NoTextures;
             public int PickX = -1, PickY = -1;
             public bool Force;
+            public bool Animate;
+            public int? Frames;
+            public string Format;
             public float? Scale;
             public int? Width;
             public int? Height;
@@ -182,9 +194,13 @@ namespace DSPRE.Avalonia.MapShots
                         continue;
                     }
 
+                    bool animate = options.Animate || (settings?.Animate ?? false);
+                    bool apng = animate && AnimatedFormat(options.Format ?? settings?.Format) == "apng";
+                    string extension = animate ? (apng ? ".apng" : ".gif") : ".png";
                     string file = string.IsNullOrWhiteSpace(settings?.File)
-                        ? SafeFileName(string.IsNullOrWhiteSpace(name) ? id.ToString("D3") : name) + ".png"
+                        ? SafeFileName(string.IsNullOrWhiteSpace(name) ? id.ToString("D3") : name) + extension
                         : settings.File;
+                    if (animate) file = Path.ChangeExtension(file, extension);
                     string path = Path.Combine(outDir, file);
                     if (File.Exists(path) && new FileInfo(path).Length > 0 && !options.Force)
                     {
@@ -194,6 +210,12 @@ namespace DSPRE.Avalonia.MapShots
 
                     if (settings?.Stack != null && settings.Stack.Length > 0)
                     {
+                        if (animate)
+                        {
+                            empty++;
+                            Console.WriteLine($"  {id:D3} {name}: animated captures need one header, not a stack");
+                            continue;
+                        }
                         RawImage stacked = RenderStack(id, settings, options, out string stackNote);
                         if (stacked == null) { empty++; Console.WriteLine($"  {id:D3} {name}: {stackNote}"); continue; }
                         Save(stacked, path);
@@ -209,10 +231,26 @@ namespace DSPRE.Avalonia.MapShots
                         }
 
                         MapShotCamera camera = MakeCamera(scene, settings, options);
-                        RawImage image = MapShotRenderer.Render(scene.Scene, camera, out MapShotStats stats);
-                        Save(image, path);
-                        Console.WriteLine($"  {id:D3} {name}: {camera.Width}x{camera.Height}, {stats.DrawnTriangles} triangles");
-                        Pick(scene.Scene, stats, options);
+                        if (animate)
+                        {
+                            List<RawImage> frames = RenderAnimation(scene, camera, settings, options,
+                                out int frameCount, out int delay, out int delayNumerator, out int delayDenominator,
+                                out MapShotStats firstStats, out string note);
+                            if (frames == null) { empty++; Console.WriteLine($"  {id:D3} {name}: {note}"); continue; }
+                            if (apng) SaveApng(frames, path, delayNumerator, delayDenominator);
+                            else SaveGif(frames, path, delay);
+                            string timing = apng
+                                ? (delayNumerator * 1000.0 / delayDenominator).ToString("F1", CultureInfo.InvariantCulture) + " ms"
+                                : delay * 10 + " ms";
+                            Console.WriteLine($"  {id:D3} {name}: {camera.Width}x{camera.Height}, {frameCount} frames at {timing}, {firstStats.DrawnTriangles} triangles");
+                        }
+                        else
+                        {
+                            RawImage image = MapShotRenderer.Render(scene.Scene, camera, out MapShotStats stats);
+                            Save(image, path);
+                            Console.WriteLine($"  {id:D3} {name}: {camera.Width}x{camera.Height}, {stats.DrawnTriangles} triangles");
+                            Pick(scene.Scene, stats, options);
+                        }
                     }
                     written++;
                 }
@@ -281,6 +319,12 @@ namespace DSPRE.Avalonia.MapShots
                             break;
                         }
                     case "--force": o.Force = true; break;
+                    case "--animate": o.Animate = true; break;
+                    case "--frames": o.Frames = int.Parse(Next(), CultureInfo.InvariantCulture); break;
+                    case "--format":
+                        o.Format = Next();
+                        AnimatedFormat(o.Format);
+                        break;
                     case "--scale": o.Scale = float.Parse(Next(), CultureInfo.InvariantCulture); break;
                     case "--width": o.Width = int.Parse(Next(), CultureInfo.InvariantCulture); break;
                     case "--height": o.Height = int.Parse(Next(), CultureInfo.InvariantCulture); break;
@@ -300,6 +344,7 @@ namespace DSPRE.Avalonia.MapShots
         {
             Console.Error.WriteLine("Usage: DSPRE.Avalonia --map-shots [--rom <project folder>] [--game CPUE] [--out <dir>] [--config <file>]");
             Console.Error.WriteLine("          [--maps 5,35] [--filter name] [--list] [--info] [--force] [--scale 16] [--width 512] [--height 512] [--pitch 50]");
+            Console.Error.WriteLine("          [--animate] [--frames 120] [--format apng|gif]");
             Console.Error.WriteLine("          [--light] [--no-light] [--light-dir x,y,z] [--light-ambient n] [--light-diffuse n]");
             return 2;
         }
@@ -438,6 +483,9 @@ namespace DSPRE.Avalonia.MapShots
                 Cells = entry.Cells ?? defaults.Cells,
                 Shade = entry.Shade ?? defaults.Shade,
                 Lighting = entry.Lighting ?? defaults.Lighting,
+                Animate = entry.Animate ?? defaults.Animate,
+                Frames = entry.Frames ?? defaults.Frames,
+                Format = entry.Format ?? defaults.Format,
             };
         }
 
@@ -707,6 +755,75 @@ namespace DSPRE.Avalonia.MapShots
         private static void Save(RawImage image, string path)
         {
             PlainFiles.WriteBytes(path, GameBanner.EncodePng(image));
+        }
+
+        private static void SaveGif(List<RawImage> frames, string path, int delayCentiseconds)
+        {
+            PlainFiles.WriteBytes(path, GifAnimation.Encode(frames, delayCentiseconds));
+        }
+
+        private static void SaveApng(List<RawImage> frames, string path, int delayNumerator, int delayDenominator)
+        {
+            PlainFiles.WriteBytes(path, AnimatedPng.Encode(frames, delayNumerator, delayDenominator));
+        }
+
+        private static string AnimatedFormat(string configured)
+        {
+            if (string.IsNullOrWhiteSpace(configured)) return "apng";
+            if (string.Equals(configured, "apng", StringComparison.OrdinalIgnoreCase)) return "apng";
+            if (string.Equals(configured, "gif", StringComparison.OrdinalIgnoreCase)) return "gif";
+            throw new ArgumentException("animated format must be apng or gif");
+        }
+
+        /// <summary>
+        /// Renders the map's field animations. The animation loop is sampled down to the requested
+        /// number of frames, so a long joint loop still loops cleanly in a smaller GIF.
+        /// </summary>
+        private static List<RawImage> RenderAnimation(MapShotScene scene, MapShotCamera camera,
+            MapShotSettings settings, Options options, out int frameCount, out int delayCentiseconds,
+            out int delayNumerator, out int delayDenominator, out MapShotStats firstStats, out string note)
+        {
+            frameCount = 0;
+            delayCentiseconds = GifAnimation.DefaultDelayCentiseconds;
+            delayNumerator = 1;
+            delayDenominator = 30;
+            firstStats = null;
+            note = "";
+
+            MapShotAnimation animation = new MapShotAnimation(scene);
+            if (!animation.HasAnything)
+            {
+                note = "nothing animates in this map";
+                return null;
+            }
+
+            int loop = Math.Max(1, animation.LoopFrames);
+            int requested = options.Frames ?? settings?.Frames ?? MapShotAnimation.DefaultFrames;
+            requested = Math.Clamp(requested, 1, 600);
+            int step = loop > 1 ? Math.Max(1, (int)Math.Round((double)loop / requested)) : 1;
+            frameCount = loop > 1 ? (loop + step - 1) / step : requested;
+            frameCount = Math.Clamp(frameCount, 1, 600);
+            delayCentiseconds = Math.Max(1, (int)Math.Round(step * 100.0 / 30.0));
+            delayNumerator = step;
+            delayDenominator = 30;
+
+            // Keep a runaway request from holding gigabytes of frames in memory.
+            long bytes = (long)camera.Width * camera.Height * 4 * frameCount;
+            if (bytes > 1_500_000_000L)
+            {
+                note = $"{frameCount} frames would need {bytes / (1024 * 1024)} MB; use --frames or --scale";
+                return null;
+            }
+
+            List<RawImage> frames = new List<RawImage>(frameCount);
+            for (int i = 0; i < frameCount; i++)
+            {
+                int at = loop > 1 ? i * step : i;
+                RawImage image = MapShotRenderer.Render(scene.Scene, camera, out MapShotStats stats, animation.At(at));
+                if (i == 0) firstStats = stats;
+                frames.Add(image);
+            }
+            return frames;
         }
 
         private static string SafeFileName(string name)
